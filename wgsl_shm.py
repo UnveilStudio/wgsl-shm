@@ -17,6 +17,7 @@ Run:
   python wgsl_shm.py --shader shaders/voronoi.wgsl --schema shaders/voronoi.json
   python wgsl_shm.py --preview            # finestra cv2 locale (no TD richiesto)
   python wgsl_shm.py --out ndi --ndi-name "wgsl-shm"
+  python wgsl_shm.py --out spout --spout-name "wgsl-shm"   # TD Non-Commercial friendly
 
 Apri: http://127.0.0.1:54321/?ws=54322
 
@@ -29,7 +30,7 @@ Opzioni:
   --width  / --height   override risoluzione (default 3840x2160)
   --preview             apri finestra cv2 con l'output (no TD necessario)
   --preview-scale F     fattore scala finestra preview (default 0.5)
-  --out shm|ndi         transport del frame (default shm)
+  --out shm|ndi|spout   transport del frame (default shm)
 """
 import os, sys, time
 
@@ -106,10 +107,11 @@ def main():
     ap.add_argument("--width",   type=int, default=3840)
     ap.add_argument("--height",  type=int, default=2160)
     ap.add_argument("--shm-name", default=SHM_NAME, help="nome SHM TD (default TOPamd)")
-    ap.add_argument("--out",      default="shm", choices=["shm", "ndi"],
-                    help="transport del frame: shm (default) o ndi")
-    ap.add_argument("--ndi-name", default=None, help="nome NDI source (default = --shm-name)")
-    ap.add_argument("--ndi-fps",  default="60/1", help="frame rate NDI dichiarato (N/D, default 60/1)")
+    ap.add_argument("--out",      default="shm", choices=["shm", "ndi", "spout"],
+                    help="transport del frame: shm (default), ndi o spout")
+    ap.add_argument("--ndi-name",   default=None, help="nome NDI source (default = --shm-name)")
+    ap.add_argument("--ndi-fps",    default="60/1", help="frame rate NDI dichiarato (N/D, default 60/1)")
+    ap.add_argument("--spout-name", default=None, help="nome Spout sender (default = --shm-name)")
     ap.add_argument("--fps",      type=int, default=0, help="FPS cap (0=unlimited)")
     ap.add_argument("--preview",  action="store_true",
                     help="apri finestra cv2 con l'output (no TD necessario)")
@@ -143,6 +145,12 @@ def main():
             short_name=args.ndi_name or args.shm_name,
             width=w, height=h,
             fps_n=int(n_str), fps_d=int(d_str),
+        )
+    elif args.out == "spout":
+        from spout_sender import SpoutOut
+        tx = SpoutOut(
+            short_name=args.spout_name or args.shm_name,
+            width=w, height=h,
         )
     else:
         tx = TopSharedMemSender(

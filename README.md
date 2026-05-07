@@ -8,6 +8,7 @@
   <img alt="GPU" src="https://img.shields.io/badge/gpu-wgpu--py-ff7f50?logo=webgpu&logoColor=white">
   <img alt="TouchDesigner" src="https://img.shields.io/badge/TouchDesigner-friendly-2bbc8a">
   <img alt="NDI Runtime" src="https://img.shields.io/badge/NDI%20Runtime-5%20%2F%206-5ac8e6">
+  <img alt="Spout" src="https://img.shields.io/badge/Spout-supported-aa6eff">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
   <a href="AGENTS.md"><img alt="Agent-friendly" src="https://img.shields.io/badge/agent--friendly-yes-7c3aed"></a>
 </p>
@@ -16,10 +17,10 @@
 
 > **Live performance, no compromise.**
 
-Real-time **WGSL compute shaders** on **AMD integrated GPU** → **Shared Memory** (Win32, zero-copy) or **NDI**.
+Real-time **WGSL compute shaders** on **AMD integrated GPU** → **Shared Memory** (Win32, zero-copy), **Spout** (DX11 GPU sharing) or **NDI** (LAN streaming).
 Built for AMD Ryzen AI 300 / Radeon 880M, runs on any AMD iGPU supported by [wgpu-py](https://github.com/pygfx/wgpu-py). 4K @ 60+ fps with a live HTML/WebSocket control panel and 16 included shaders.
 
-The SHM transport is **byte-compatible with TouchDesigner's Shared Memory In TOP** (UT_SharedMem protocol), tested live — but any consumer that can map a Win32 file mapping can read the frames.
+The SHM transport is **byte-compatible with TouchDesigner's Shared Memory In TOP** (UT_SharedMem protocol), tested live. Spout makes the same shaders show up in **TouchDesigner Non-Commercial** (where SHM In TOP isn't available), Resolume, OBS, Notch, Magic, vMix, Unreal, Unity, and any other Spout-aware app. NDI ships the frame over the LAN to receivers that don't share a machine with the producer.
 
 > Why? Cross-GPU shared textures (AMD → NVIDIA) don't work, and NDI eats 15-25% CPU. Local SHM is zero-copy on Windows and free.
 
@@ -57,18 +58,20 @@ flowchart LR
     GEN --> TEX[(rgba8unorm<br/>storage texture)]
     TEX --> RB[double-buffered<br/>staging readback]
     RB --> FRAME[numpy uint8<br/>H × W × 4 RGBA]
-    FRAME --> SHM[td_shm<br/>UT_SharedMem protocol]
+    FRAME --> SHM[td_shm<br/>UT_SharedMem]
+    FRAME --> SPOUT[spout_sender<br/>SpoutLibrary.dll<br/>DX11 shared NT handle]
     FRAME --> NDI[ndi_sender<br/>libndi via ctypes]
     FRAME --> CV2[cv2 preview<br/>--preview]
-    SHM -.-> TD[TouchDesigner<br/>Shared Memory In TOP]
-    NDI -.-> EXT[OBS / Resolume / vMix /<br/>any NDI receiver on LAN]
+    SHM -.-> TD[TouchDesigner Pro<br/>Shared Memory In TOP]
+    SPOUT -.-> SPR[TD Non-Commercial / OBS<br/>Resolume / Notch /<br/>Magic / Unreal / Unity]
+    NDI -.-> EXT[any NDI receiver<br/>on the LAN]
 
     classDef py fill:#0e2233,stroke:#5ac8e6,stroke-width:2px,color:#fff
     classDef gpu fill:#3a1a5c,stroke:#aa6eff,stroke-width:2px,color:#fff
     classDef sys fill:#0d1117,stroke:#444,color:#fff
-    class UI,STATE,GEN,RB,FRAME,SHM,NDI,CV2 py
+    class UI,STATE,GEN,RB,FRAME,SHM,SPOUT,NDI,CV2 py
     class TEX gpu
-    class TD,EXT sys
+    class TD,SPR,EXT sys
 ```
 
 Compute shaders run **on the iGPU** (system RAM, no PCIe round-trip), readback uses two persistent staging buffers so GPU and CPU overlap (frame N writes while frame N-1 reads). The HTML panel pushes uniforms over WebSocket — slider tweaks land within a frame.
@@ -128,9 +131,10 @@ That's it — the TOP shows your shader at native resolution, zero-copy.
 --no-ui               disable HTTP / WS server
 --port N              HTTP port (WS = port + 1)
 --shm-name NAME       SHM name for TD (default TOPamd)
---out shm | ndi       transport (default shm)
+--out shm|ndi|spout   transport (default shm)
 --ndi-name NAME       NDI source name (default = --shm-name)
 --ndi-fps N/D         declared NDI frame rate (default 60/1)
+--spout-name NAME     Spout sender name (default = --shm-name)
 --preview             local cv2 window
 --preview-scale F     preview window scale (default 0.5 = 1080p on 4K)
 ```
@@ -171,6 +175,30 @@ If you `--out ndi` without the runtime installed you get a clear error pointing 
 
 > ⚠️ The NDI DLL is **not** MIT — it has its own EULA. This repo is MIT only for the original code. If you redistribute builds of this project, **do not** include the DLL — users have to install it themselves.
 
+## Transports
+
+Three ways to ship the same RGBA frame out — pick whatever your downstream consumer speaks.
+
+| Transport | Mechanism | CPU-side cost | GPU-side cost | When to use |
+|---|---|---|---|---|
+| **`--out shm`** *(default)* | Win32 file mapping (UT_SharedMem) | `memcpy` only | none | TouchDesigner Commercial/Pro on the **same machine**. Lowest latency, lowest overhead. |
+| **`--out spout`** | DX11 shared NT handle (Spout) | zero (we pass the numpy buffer pointer directly) | ~3-5 ms upload to a DX11 texture, **inherent to Spout** | TouchDesigner **Non-Commercial** (no SHM In TOP), Resolume, OBS, Notch, Magic, vMix, Unreal, Unity. Same machine, GPU sharing. |
+| **`--out ndi`** | NDI 5/6 RTP-like over LAN | zero-copy | NDI internal encode (mDNS announce + UDP) | Receiver on a **different machine** on the LAN. Or when you want to bridge to NDI-aware tools across the network. |
+
+The CPU-side cost is **zero in all three** — we never copy the frame in Python. The numbers above measure overhead added by the transport itself.
+
+> Note: SHM is the fastest path because both sides agree to look at the same RAM. Spout has to push the bytes onto the GPU because that's where DX11 shared textures live; we pass the raw pointer to SpoutLibrary so we don't double-copy. NDI is the only one that crosses the network.
+
+### Spout install
+
+Spout requires the [`UnveilStudio/SPOUT2ForPython`](https://github.com/UnveilStudio/SPOUT2ForPython) package — same family of bindings as this repo, BSD-2 + bundled `SpoutLibrary.dll`:
+
+```bash
+pip install git+https://github.com/UnveilStudio/SPOUT2ForPython.git
+```
+
+If you `--out spout` without it, the script raises a clear `ImportError` pointing back to that command.
+
 ## Performance notes
 
 - **Resolution**: 4K @ 60+ fps on Radeon 880M with the included shaders. Raymarch / fluid drop to ~30 fps depending on iteration count.
@@ -193,6 +221,7 @@ wgsl-shm/
 ├── amd_generator.py     # compute shader pipeline + double-buffered readback
 ├── td_shm.py            # Shared Memory In TOP protocol (UT_SharedMem)
 ├── ndi_sender.py        # NDI sender via libndi (DLL not bundled)
+├── spout_sender.py      # Spout sender (wraps UnveilStudio/SPOUT2ForPython)
 ├── control/
 │   ├── server.py        # HTTP + WebSocket control panel
 │   └── panel.html       # browser UI
@@ -205,6 +234,7 @@ wgsl-shm/
 ## Built on top of
 
 - **[wgpu-py](https://github.com/pygfx/wgpu-py)** by Almar Klein et al. — the WebGPU Python bindings doing the heavy lifting (compute pipeline, buffer mapping, validation). BSD-2.
+- **[Spout2](https://github.com/leadedge/Spout2)** by Lynn Jarvis — the DX11 GPU sharing protocol used by `--out spout`, wrapped via [`UnveilStudio/SPOUT2ForPython`](https://github.com/UnveilStudio/SPOUT2ForPython). BSD-2.
 
 `td_shm.py` is a clean-room Python implementation of the publicly documented `UT_SharedMem` wire format used by TouchDesigner's Shared Memory In TOP. No proprietary Derivative source code was used or referenced — only the protocol shape, which is the explicit contract any third-party producer must implement.
 
@@ -226,4 +256,5 @@ Third-party components have their own licences:
 - [`wgpu-py`](https://github.com/pygfx/wgpu-py) — BSD-2
 - `numpy`, `websockets` — BSD-3 / MIT
 - `opencv-python` (optional, only for `--preview`) — Apache 2.0
+- [`SPOUT2ForPython`](https://github.com/UnveilStudio/SPOUT2ForPython) (optional, only for `--out spout`) — MIT, bundled `SpoutLibrary.dll` is BSD-2 © 2020-2024 Lynn Jarvis (Spout2 project)
 - **NDI Runtime** (optional, only for `--out ndi`) — proprietary EULA by **Vizrt** / NewTek; not part of this project, see the section above. NDI® is a registered trademark of Vizrt Group.

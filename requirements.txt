@@ -2,5 +2,7 @@ numpy>=1.24
 wgpu>=0.18
 websockets>=12.0
 
-# Opzionale: serve solo per --preview (finestra cv2 locale)
-#   pip install opencv-python
+# Optional extras (install only if you need them):
+#   pip install opencv-python                                          # for --preview (cv2 window)
+#   pip install git+https://github.com/UnveilStudio/SPOUT2ForPython    # for --out spout
+#   NDI Runtime install for --out ndi — see README, not a pip package

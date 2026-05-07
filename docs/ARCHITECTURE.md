@@ -61,6 +61,17 @@ Clean-room Python implementation of the publicly documented TouchDesigner `UT_Sh
 
 The TOP on the TD side configured with `Memory Name = TOPamd, Global = OFF` reads exactly this layout. There is no synchronisation beyond the mutex around the `memcpy` — TD polls the header version counter on each cook.
 
+## Spout protocol (`spout_sender.py`)
+
+Thin wrapper around [`UnveilStudio/SPOUT2ForPython`](https://github.com/UnveilStudio/SPOUT2ForPython), itself a ctypes binding for `SpoutLibrary.dll` (Lynn Jarvis, BSD-2). The wrapper exposes the same `.write(frame)` / `.close()` shape as `td_shm.py` and `ndi_sender.py`, so the main loop is transport-agnostic.
+
+Key facts:
+
+- **Spout shares a DX11 texture, not RAM.** Internally SpoutLibrary creates a DX11 shared NT handle that any other process on the same machine can open (TD, OBS, Resolume, Notch, Magic, Unreal, Unity, …). This is GPU-to-GPU on the same physical device — zero PCIe round-trip across producer/consumer.
+- **We don't render directly into a DX11 texture.** Our pipeline already produced a CPU `numpy uint8 (H, W, 4) RGBA` array (the staging-buffer readback from wgpu). To hand that to Spout we hand SpoutLibrary the **raw pointer** to our numpy buffer via `ctypes.data_as(POINTER(c_ubyte))` — zero CPU-side copies.
+- **The cost.** SpoutLibrary still has to push that CPU buffer onto the GPU once per frame: `glTexImage2D` upload to a hidden OpenGL texture (created lazily via `create_opengl()`), then GL↔DX11 interop copy. Together: ~3-5 ms at 4K. This is inherent to Spout's design — bypassing it would require wgpu to render directly into a DX11 shared texture, which `wgpu-py` does not currently expose.
+- **Headless context.** SpoutSender's `create_opengl()` makes a hidden window + OpenGL context so the script runs without an existing GL stack. We call it once at construction.
+
 ## NDI protocol (`ndi_sender.py`)
 
 `Processing.NDI.Lib.x64.dll` exposes a flat C ABI. We bind the subset we need via ctypes:
@@ -94,6 +105,7 @@ Shader switch is a pop-once queue: the main loop calls `state.pop_pending_shader
 | WGSL storage texture | `rgba8unorm` | (H, W) of `vec4<f32>` (write-only) | sRGB-naive — no automatic gamma |
 | Readback ndarray | `np.uint8` | `(H, W, 4)` contiguous | RGBA byte order |
 | SHM payload | `R8G8B8A8_UNORM` | row-major `H × W × 4` bytes | same memory the ndarray points at |
+| Spout share | `GL_RGBA` (passed as ctypes pointer) | numpy buffer in CPU RAM | SpoutLibrary uploads to a DX11 texture internally |
 | NDI frame | FourCC `RGBA` | row-major, stride = `W × 4` | NDI accepts BGRA/UYVY too — we just pick RGBA |
 | cv2 preview | BGR (after `cvtColor`) | `(ph, pw, 3)` | resize first to keep the GUI thread cheap |
 
@@ -107,9 +119,10 @@ Numbers below are 4K (3840 × 2160), Radeon 880M, plasma shader, no preview, no 
 | GPU texture → staging copy | ~3 ms |
 | CPU map + memcpy from staging | ~7 ms |
 | `tx.write` (SHM mutex + memcpy) | ~2 ms |
-| **Frame total (no preview)** | **~14 ms ≈ 65 fps** |
+| **Frame total (no preview, SHM)** | **~14 ms ≈ 65 fps** |
 | `--preview` cv2 overhead | +5 ms |
-| `--out ndi` instead of SHM | +3 ms |
+| `--out spout` instead of SHM (GL upload + DX11 interop) | +3-5 ms |
+| `--out ndi` instead of SHM (libndi internal encode) | +3 ms |
 
 Compute-heavy shaders (raymarch, fluid) push GPU dispatch to 10-20 ms — readback and SHM stay flat.
 

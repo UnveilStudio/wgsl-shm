@@ -10,7 +10,7 @@ A single-file Python entry point (`wgsl_shm.py`) that:
 2. compiles a WGSL compute shader from `shaders/*.wgsl`,
 3. dispatches it every frame at the requested resolution (default 3840 × 2160),
 4. reads the texture back into a numpy `(H, W, 4) uint8` RGBA array using a double-buffered staging path so GPU and CPU overlap,
-5. ships the frame either to a TouchDesigner Shared Memory In TOP (`td_shm.py`, native UT_SharedMem protocol) **or** an NDI source (`ndi_sender.py`, ctypes wrapper around `Processing.NDI.Lib.x64.dll`),
+5. ships the frame to one of three transports — `td_shm.py` (Win32 file mapping, UT_SharedMem wire format), `spout_sender.py` (DX11 GPU sharing via `UnveilStudio/SPOUT2ForPython`), or `ndi_sender.py` (LAN streaming via `Processing.NDI.Lib.x64.dll`),
 6. serves an HTML / WebSocket control panel (`control/server.py` + `control/panel.html`) so a human in a browser can tweak the uniforms live.
 
 This is **not** a pip-installable library. It's a runner. Clone, `pip install -r requirements.txt`, `python wgsl_shm.py`.
@@ -21,8 +21,9 @@ This is **not** a pip-installable library. It's a runner. Clone, `pip install -r
 git clone https://github.com/UnveilStudio/wgsl-shm.git
 cd wgsl-shm
 pip install -r requirements.txt
-python wgsl_shm.py --preview          # cv2 window, no TD needed
-python wgsl_shm.py                    # SHM → TouchDesigner
+python wgsl_shm.py --preview          # cv2 window, no consumer needed
+python wgsl_shm.py                    # SHM → TouchDesigner Pro (default)
+python wgsl_shm.py --out spout        # Spout → TD Non-Commercial / OBS / Resolume / ...
 python wgsl_shm.py --out ndi          # NDI (needs NDI Runtime, see README)
 ```
 
@@ -35,6 +36,7 @@ Open http://127.0.0.1:54321/?ws=54322 in a browser for the control panel.
 | `wgsl_shm.py` | CLI, main loop, FPS reporting, hot-reload, preview cv2 |
 | `amd_generator.py` | `AMDGenerator`: wgpu compute pipeline + 2-staging-buffer readback |
 | `td_shm.py` | `TopSharedMemSender`: `UT_SharedMem` protocol (Win32 file mapping + mutex + TD header v2) |
+| `spout_sender.py` | `SpoutOut`: thin wrapper around `UnveilStudio/SPOUT2ForPython`. Lazy-imports `spout`. Pre-creates a hidden GL context (`create_opengl()`) so the script can run headless. |
 | `ndi_sender.py` | `NdiSender`: ctypes wrapper around libndi `NDIlib_send_*` |
 | `control/server.py` | `ShaderControlState`, HTTP for `panel.html`, WebSocket for live params |
 | `control/panel.html` | Browser UI — sliders / colors / shader dropdown |
@@ -59,6 +61,8 @@ Open http://127.0.0.1:54321/?ws=54322 in a browser for the control panel.
 
 - **Wrong adapter picked**: `pick_igpu_amd()` in `wgsl_shm.py` hard-filters for `AMD` + `IntegratedGPU`. On a system without an AMD iGPU it raises `RuntimeError`. Edit the filter for other targets.
 - **NDI DLL not found**: `--out ndi` fails clearly if `Processing.NDI.Lib.x64.dll` is not in PATH. Either install the NDI Runtime (see README) or copy the DLL next to `wgsl_shm.py`.
+- **Spout package not installed**: `--out spout` raises `ImportError` pointing at `pip install git+https://github.com/UnveilStudio/SPOUT2ForPython.git`. The DLL is bundled in that package — no separate runtime install.
+- **Spout GPU upload cost**: SpoutLibrary uploads the CPU buffer into a DX11 shared texture per frame (~3-5 ms at 4K). This is inherent to the protocol — Spout shares NT handles, not RAM. The CPU-side copy is already zero (we pass the numpy buffer pointer with `ctypes.data_as`).
 - **`cv2.waitKey(1)` cost**: on Windows the GUI pump is ~1-3 ms per frame even when idle. Adding `--preview` to a 4K pipeline drops fps from ~65 to ~30. Don't blame the shader.
 - **Shader compile errors at hot-reload**: `AMDGenerator.reload_shader()` returns `False` and keeps the previous pipeline alive — the loop logs `[hot-reload] FAILED (keep old)` and keeps running. Look in stdout, not in the panel, for compile errors.
 - **TD doesn't see the SHM**: TouchDesigner needs **Memory Name = `TOPamd`** and **Global = OFF**. The defaults in the SHM In TOP do *not* match.
