@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>AMD iGPU Shader Panel</title>
+<style>
+  :root {
+    --bg:#0b0d10; --panel:#13161b; --edge:#1f242c; --text:#d6dae1;
+    --muted:#7a8393; --accent:#f97316; --accent2:#38bdf8;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font:13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    min-height:100vh; padding:18px;
+  }
+  header{display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;}
+  header h1{margin:0; font-size:14px; letter-spacing:1.5px; text-transform:uppercase; color:var(--muted);}
+  header .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle;}
+  header button, header select{
+    background:var(--panel); color:var(--text); border:1px solid var(--edge);
+    padding:6px 10px; cursor:pointer; font:inherit; border-radius:2px;
+  }
+  header button:hover, header select:hover{border-color:var(--accent);}
+  header select{color:var(--accent); font-weight:600;}
+
+  #status{color:var(--muted); font-size:11px;}
+  .ok{color:#22c55e}.bad{color:#ef4444}.wait{color:#eab308}
+
+  #shader-name{color:var(--accent); font-weight:600;}
+
+  .panel{
+    background:var(--panel); border:1px solid var(--edge); border-radius:3px;
+    padding:14px 16px; max-width:520px;
+  }
+  .row{display:grid; grid-template-columns: 110px 1fr 72px; gap:10px; align-items:center; margin:8px 0;}
+  .row label{color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:0.8px;}
+  .row input[type=range]{
+    -webkit-appearance:none; appearance:none;
+    height:4px; background:var(--edge); border-radius:2px; outline:none;
+  }
+  .row input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none; width:14px; height:14px; background:var(--accent);
+    border-radius:50%; cursor:pointer; border:0;
+  }
+  .row input[type=number]{
+    background:var(--bg); color:var(--text); border:1px solid var(--edge);
+    padding:3px 5px; font:inherit; width:100%; border-radius:2px;
+  }
+  .row input[type=color]{
+    width:44px; height:26px; padding:0; border:1px solid var(--edge);
+    background:transparent; cursor:pointer; border-radius:2px;
+  }
+  .swatch{display:flex; align-items:center; gap:8px;}
+  .swatch span{color:var(--muted); font-size:11px;}
+
+  footer{margin-top:14px; color:var(--muted); font-size:11px;}
+  code{background:var(--panel); padding:1px 4px; border-radius:2px;}
+</style>
+</head>
+<body>
+<header>
+  <h1>iGPU panel — <select id="shader-select"></select></h1>
+  <div>
+    <span id="status"><span class="dot wait"></span>connecting…</span>
+    &nbsp;&nbsp;
+    <button id="reload">⟲ reload schema</button>
+  </div>
+</header>
+
+<div class="panel" id="panel"></div>
+
+<footer>
+  WebSocket → Python → wgpu iGPU → SHM → TD. Ogni slider è un byte in volo.
+</footer>
+
+<script>
+const panel  = document.getElementById("panel");
+const stat   = document.getElementById("status");
+const ssel   = document.getElementById("shader-select");
+document.getElementById("reload").onclick = loadSchema;
+
+let ws = null;
+let state = {};          // nome → valore corrente
+let schema = null;
+let currentShader = "";
+
+ssel.onchange = () => {
+  const name = ssel.value;
+  if (name && name !== currentShader && ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({type: "change_shader", shader: name}));
+    currentShader = name;
+    // Schema will reload automatically via WS notification
+  }
+};
+
+function setStatus(kind, msg){
+  const cls = kind==="ok"?"ok":kind==="bad"?"bad":"wait";
+  stat.innerHTML = `<span class="dot ${cls}">●</span>${msg}`;
+}
+
+function connectWS(){
+  const params  = new URLSearchParams(location.search);
+  const wsPort  = params.get("ws") || (parseInt(location.port) + 1);
+  const url     = `ws://${location.hostname}:${wsPort}/`;
+  ws = new WebSocket(url);
+  ws.onopen    = () => setStatus("ok", "live");
+  ws.onclose   = () => { setStatus("bad", "disconnected – retry in 1s"); setTimeout(connectWS, 1000); };
+  ws.onerror   = () => setStatus("bad", "error");
+  ws.onmessage = (e) => {
+    try {
+      const m = JSON.parse(e.data);
+      if (m.type === "schema_changed") loadSchema();
+    } catch(_) {}
+  };
+}
+
+function send(name, value){
+  if (!ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({name, value}));
+}
+
+function hex2rgb(h){
+  const n = parseInt(h.slice(1), 16);
+  return [((n>>16)&0xff)/255, ((n>>8)&0xff)/255, (n&0xff)/255];
+}
+function rgb2hex(rgb){
+  const f = v => Math.round(v*255).toString(16).padStart(2,"0");
+  return "#" + f(rgb[0]) + f(rgb[1]) + f(rgb[2]);
+}
+
+function buildRow(u){
+  const row = document.createElement("div");
+  row.className = "row";
+  const lbl = document.createElement("label");
+  lbl.textContent = u.name;
+  row.appendChild(lbl);
+
+  if (u.type === "float" || u.type === "int"){
+    const isInt = u.type === "int";
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min  = u.min; slider.max = u.max;
+    slider.step = u.step ?? (isInt ? 1 : 0.01);
+    slider.value = u.default;
+
+    const num = document.createElement("input");
+    num.type  = "number";
+    num.min   = u.min; num.max = u.max; num.step = slider.step;
+    num.value = u.default;
+
+    const push = (v) => {
+      const val = isInt ? Math.round(+v) : +v;
+      slider.value = val; num.value = val;
+      state[u.name] = val;
+      send(u.name, val);
+    };
+    slider.oninput = e => push(e.target.value);
+    num.onchange   = e => push(e.target.value);
+
+    state[u.name] = u.default;
+    row.appendChild(slider);
+    row.appendChild(num);
+  }
+  else if (u.type === "color"){
+    const sw = document.createElement("div");
+    sw.className = "swatch";
+    const picker = document.createElement("input");
+    picker.type = "color";
+    picker.value = rgb2hex(u.default);
+    const txt = document.createElement("span");
+    txt.textContent = u.default.map(v=>v.toFixed(2)).join(", ");
+
+    picker.oninput = (e) => {
+      const rgb = hex2rgb(e.target.value);
+      state[u.name] = rgb;
+      txt.textContent = rgb.map(v=>v.toFixed(2)).join(", ");
+      send(u.name, rgb);
+    };
+    state[u.name] = u.default.slice();
+
+    sw.appendChild(picker);
+    sw.appendChild(txt);
+    row.appendChild(sw);
+    const spacer = document.createElement("span"); row.appendChild(spacer);
+  }
+  else {
+    row.appendChild(document.createTextNode("(unknown type: " + u.type + ")"));
+  }
+  return row;
+}
+
+async function loadShaderList(){
+  try {
+    const r = await fetch("/shaders?_=" + Date.now());
+    const shaders = await r.json();
+    ssel.innerHTML = "";
+    shaders.forEach(s => {
+      const opt = document.createElement("option");
+      opt.value = s.name; opt.textContent = s.name;
+      ssel.appendChild(opt);
+    });
+  } catch(e) { /* ignore */ }
+}
+
+async function loadSchema(){
+  setStatus("wait", "loading schema…");
+  try {
+    await loadShaderList();
+    const r = await fetch("/schema?_=" + Date.now());
+    schema = await r.json();
+    currentShader = schema.name;
+    ssel.value = currentShader;
+    panel.innerHTML = "";
+    state = {};
+    schema.uniforms.forEach(u => panel.appendChild(buildRow(u)));
+    schema.uniforms.forEach(u => send(u.name, state[u.name]));
+    setStatus("ok", schema.name + " loaded");
+  } catch(e){
+    setStatus("bad", "schema load failed: " + e);
+  }
+}
+
+connectWS();
+loadSchema();
+</script>
+</body>
+</html>

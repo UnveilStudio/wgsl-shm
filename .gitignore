@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+envs/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Local
+.env
+.env.local
+*.local
+
+# NDI proprietary DLLs (utenti devono installarle separatamente, vedi README)
+Processing.NDI.Lib.x64.dll
+libndi.dylib
+libndi.so*
+
+# Cache shader compilation (wgpu)
+.wgpu_cache/

@@ -1,0 +1,13 @@
+{
+  "name": "voronoi",
+  "shader": "voronoi.wgsl",
+  "uniforms": [
+    { "name": "scale",     "type": "float", "min": 1.0,  "max": 20.0, "default": 6.0,  "step": 0.01 },
+    { "name": "warp",      "type": "float", "min": 0.0,  "max": 2.0,  "default": 0.6,  "step": 0.01 },
+    { "name": "speed",     "type": "float", "min": 0.0,  "max": 3.0,  "default": 0.8,  "step": 0.01 },
+    { "name": "color_mix", "type": "float", "min": 0.0,  "max": 1.0,  "default": 0.6,  "step": 0.01 },
+    { "name": "col_a",     "type": "color", "default": [0.04, 0.06, 0.12] },
+    { "name": "col_b",     "type": "color", "default": [0.90, 0.35, 0.15] },
+    { "name": "col_c",     "type": "color", "default": [1.00, 0.92, 0.70] }
+  ]
+}

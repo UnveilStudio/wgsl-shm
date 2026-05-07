@@ -1,0 +1,14 @@
+{
+  "name": "plasma",
+  "shader": "plasma.wgsl",
+  "uniforms": [
+    { "name": "scale",     "type": "float", "min": 0.5,  "max": 8.0,  "default": 2.5,  "step": 0.01 },
+    { "name": "warp",      "type": "float", "min": 0.0,  "max": 2.0,  "default": 1.0,  "step": 0.01 },
+    { "name": "speed",     "type": "float", "min": 0.0,  "max": 3.0,  "default": 1.0,  "step": 0.01 },
+    { "name": "color_mix", "type": "float", "min": 0.0,  "max": 1.0,  "default": 0.5,  "step": 0.01 },
+    { "name": "octaves",   "type": "int",   "min": 1,    "max": 7,    "default": 5,    "step": 1    },
+    { "name": "col_a",     "type": "color", "default": [0.10, 0.10, 0.50] },
+    { "name": "col_b",     "type": "color", "default": [0.80, 0.20, 0.10] },
+    { "name": "col_c",     "type": "color", "default": [0.06, 0.06, 0.06] }
+  ]
+}

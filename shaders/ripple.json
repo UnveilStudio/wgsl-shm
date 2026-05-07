@@ -1,0 +1,13 @@
+{
+  "name": "ripple",
+  "shader": "ripple.wgsl",
+  "uniforms": [
+    { "name": "scale",     "type": "float", "min": 0.5,  "max": 12.0, "default": 4.0,  "step": 0.01 },
+    { "name": "warp",      "type": "float", "min": 0.0,  "max": 2.0,  "default": 0.5,  "step": 0.01 },
+    { "name": "speed",     "type": "float", "min": 0.0,  "max": 3.0,  "default": 1.0,  "step": 0.01 },
+    { "name": "color_mix", "type": "float", "min": 0.0,  "max": 1.0,  "default": 0.7,  "step": 0.01 },
+    { "name": "col_a",     "type": "color", "default": [0.02, 0.06, 0.18] },
+    { "name": "col_b",     "type": "color", "default": [0.10, 0.55, 0.80] },
+    { "name": "col_c",     "type": "color", "default": [1.00, 0.95, 0.75] }
+  ]
+}

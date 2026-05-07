@@ -1,0 +1,14 @@
+{
+  "name": "kaleido",
+  "shader": "kaleido.wgsl",
+  "uniforms": [
+    { "name": "scale",     "type": "float", "min": 0.5,  "max": 8.0,  "default": 2.5,  "step": 0.01 },
+    { "name": "warp",      "type": "float", "min": 0.0,  "max": 2.0,  "default": 0.7,  "step": 0.01 },
+    { "name": "speed",     "type": "float", "min": 0.0,  "max": 3.0,  "default": 0.8,  "step": 0.01 },
+    { "name": "color_mix", "type": "float", "min": 0.0,  "max": 1.0,  "default": 0.6,  "step": 0.01 },
+    { "name": "octaves",   "type": "int",   "min": 3,    "max": 12,   "default": 6,    "step": 1    },
+    { "name": "col_a",     "type": "color", "default": [0.05, 0.02, 0.15] },
+    { "name": "col_b",     "type": "color", "default": [0.85, 0.15, 0.55] },
+    { "name": "col_c",     "type": "color", "default": [1.00, 0.85, 0.40] }
+  ]
+}

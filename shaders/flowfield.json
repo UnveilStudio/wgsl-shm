@@ -1,0 +1,13 @@
+{
+  "name": "flowfield",
+  "shader": "flowfield.wgsl",
+  "uniforms": [
+    { "name": "scale",     "type": "float", "min": 0.5,  "max": 8.0,  "default": 2.2,  "step": 0.01 },
+    { "name": "warp",      "type": "float", "min": 0.0,  "max": 2.0,  "default": 0.5,  "step": 0.01 },
+    { "name": "speed",     "type": "float", "min": 0.0,  "max": 3.0,  "default": 0.7,  "step": 0.01 },
+    { "name": "color_mix", "type": "float", "min": 0.0,  "max": 1.0,  "default": 0.6,  "step": 0.01 },
+    { "name": "col_a",     "type": "color", "default": [0.03, 0.04, 0.08] },
+    { "name": "col_b",     "type": "color", "default": [0.25, 0.50, 0.75] },
+    { "name": "col_c",     "type": "color", "default": [1.00, 0.90, 0.60] }
+  ]
+}

@@ -1,0 +1,6 @@
+numpy>=1.24
+wgpu>=0.18
+websockets>=12.0
+
+# Opzionale: serve solo per --preview (finestra cv2 locale)
+#   pip install opencv-python
