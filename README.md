@@ -14,10 +14,12 @@
 
 # wgsl-shm
 
-Real-time **WGSL compute shaders** on **AMD integrated GPU** → **TouchDesigner Shared Memory In TOP** (zero-copy native) or **NDI**.
+Real-time **WGSL compute shaders** on **AMD integrated GPU** → **Shared Memory** (Win32, zero-copy) or **NDI**.
 Built for AMD Ryzen AI 300 / Radeon 880M, runs on any AMD iGPU supported by [wgpu-py](https://github.com/pygfx/wgpu-py). 4K @ 60+ fps with a live HTML/WebSocket control panel and 16 included shaders.
 
-> Why? Cross-GPU shared textures (AMD → NVIDIA) don't work, and NDI eats 15-25% CPU. Native TouchDesigner SHM is zero-copy on Windows and free.
+The SHM transport is **byte-compatible with TouchDesigner's Shared Memory In TOP** (UT_SharedMem protocol), tested live — but any consumer that can map a Win32 file mapping can read the frames.
+
+> Why? Cross-GPU shared textures (AMD → NVIDIA) don't work, and NDI eats 15-25% CPU. Local SHM is zero-copy on Windows and free.
 
 **Windows x64 only** at the moment (the SHM transport uses `CreateFileMappingW` + Win32 mutex). NDI output is optional.
 
