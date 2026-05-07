@@ -22,7 +22,7 @@ Built for AMD Ryzen AI 300 / Radeon 880M, runs on any AMD iGPU supported by [wgp
 
 The SHM transport is **byte-compatible with TouchDesigner's Shared Memory In TOP** (UT_SharedMem protocol), tested live. Spout makes the same shaders show up in **TouchDesigner Non-Commercial** (where SHM In TOP isn't available), Resolume, OBS, Notch, Magic, vMix, Unreal, Unity, and any other Spout-aware app. NDI ships the frame over the LAN to receivers that don't share a machine with the producer.
 
-> Why? Cross-GPU shared textures (AMD → NVIDIA) don't work, and NDI eats 15-25% CPU. Local SHM is zero-copy on Windows and free.
+> Why? `wgpu-py` does not currently expose a cross-adapter texture-sharing path, and NDI eats 15-25% CPU. Local SHM (and Spout for receivers that want a GPU handle on the same machine) is zero-copy where it matters, free, and shipping today.
 
 ## Built and tested on a hybrid AMD + NVIDIA performance laptop
 
@@ -182,7 +182,7 @@ Three ways to ship the same RGBA frame out — pick whatever your downstream con
 | Transport | Mechanism | CPU-side cost | GPU-side cost | When to use |
 |---|---|---|---|---|
 | **`--out shm`** *(default)* | Win32 file mapping (UT_SharedMem) | `memcpy` only | none | TouchDesigner Commercial/Pro on the **same machine**. Lowest latency, lowest overhead. |
-| **`--out spout`** | DX11 shared NT handle (Spout) | zero (we pass the numpy buffer pointer directly) | ~3-5 ms upload to a DX11 texture, **inherent to Spout** | TouchDesigner **Non-Commercial** (no SHM In TOP), Resolume, OBS, Notch, Magic, vMix, Unreal, Unity. Same machine, GPU sharing. |
+| **`--out spout`** | DX11 shared NT handle (Spout) | zero (we pass the numpy buffer pointer directly) | ~2 ms upload + GL/DX11 interop at 4K, **inherent to Spout** | TouchDesigner **Non-Commercial** (no SHM In TOP), Resolume, OBS, Notch, Magic, vMix, Unreal, Unity. Same machine, GPU sharing. |
 | **`--out ndi`** | NDI 5/6 RTP-like over LAN | zero-copy | NDI internal encode (mDNS announce + UDP) | Receiver on a **different machine** on the LAN. Or when you want to bridge to NDI-aware tools across the network. |
 
 The CPU-side cost is **zero in all three** — we never copy the frame in Python. The numbers above measure overhead added by the transport itself.
@@ -202,7 +202,8 @@ If you `--out spout` without it, the script raises a clear `ImportError` pointin
 ## Performance notes
 
 - **Resolution**: 4K @ 60+ fps on Radeon 880M with the included shaders. Raymarch / fluid drop to ~30 fps depending on iteration count.
-- **Preview cost**: `--preview` adds ~5 ms / frame for the cv2 imshow GUI thread on Windows. Headless (default) is faster.
+- **Headless throughput**: with no `--preview` and no fps cap, the plasma shader reaches **~135 fps over Spout at 4K** (`render≈4.9 ms`, `write≈2.3 ms`, `total≈7.1 ms`) on the reference Razer Blade 14. SHM is faster still — preview-less SHM measurement coming.
+- **Preview cost**: `--preview` adds ~3-5 ms / frame for the cv2 imshow GUI thread on Windows and roughly halves throughput at 4K. The standard `opencv-python` wheel is CPU-only on Windows (no CUDA / no DX accel for `cvtColor`/`resize`/GUI), so the preview is **strictly a debug aid for when you don't have a downstream consumer running** — not a hot-path tool. Headless (default) is much faster.
 - **`--profile`**: prints separate dispatch / copy ms via WGPU timestamp queries. Useful when authoring a new shader to see whether you're compute-bound or readback-bound.
 - **Workgroup size**: shaders default to `(16, 16)`. Override the `workgroup` kwarg in `AMDGenerator(...)` if a particular kernel prefers another layout.
 

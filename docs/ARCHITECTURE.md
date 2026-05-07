@@ -69,7 +69,7 @@ Key facts:
 
 - **Spout shares a DX11 texture, not RAM.** Internally SpoutLibrary creates a DX11 shared NT handle that any other process on the same machine can open (TD, OBS, Resolume, Notch, Magic, Unreal, Unity, …). This is GPU-to-GPU on the same physical device — zero PCIe round-trip across producer/consumer.
 - **We don't render directly into a DX11 texture.** Our pipeline already produced a CPU `numpy uint8 (H, W, 4) RGBA` array (the staging-buffer readback from wgpu). To hand that to Spout we hand SpoutLibrary the **raw pointer** to our numpy buffer via `ctypes.data_as(POINTER(c_ubyte))` — zero CPU-side copies.
-- **The cost.** SpoutLibrary still has to push that CPU buffer onto the GPU once per frame: `glTexImage2D` upload to a hidden OpenGL texture (created lazily via `create_opengl()`), then GL↔DX11 interop copy. Together: ~3-5 ms at 4K. This is inherent to Spout's design — bypassing it would require wgpu to render directly into a DX11 shared texture, which `wgpu-py` does not currently expose.
+- **The cost.** SpoutLibrary still has to push that CPU buffer onto the GPU once per frame: `glTexImage2D` upload to a hidden OpenGL texture (created lazily via `create_opengl()`), then GL↔DX11 interop copy. Together: **~2 ms at 4K headless** (measured on Radeon 880M, Win11, recent AMD drivers — turned out to be cheaper than initially expected because the AMD GL↔DX11 interop is well optimised on this stack). This is inherent to Spout's design — bypassing it would require wgpu to render directly into a DX11 shared texture, which `wgpu-py` does not currently expose.
 - **Headless context.** SpoutSender's `create_opengl()` makes a hidden window + OpenGL context so the script runs without an existing GL stack. We call it once at construction.
 
 ## NDI protocol (`ndi_sender.py`)
@@ -120,15 +120,15 @@ Numbers below are 4K (3840 × 2160), Radeon 880M, plasma shader, no preview, no 
 | CPU map + memcpy from staging | ~7 ms |
 | `tx.write` (SHM mutex + memcpy) | ~2 ms |
 | **Frame total (no preview, SHM)** | **~14 ms ≈ 65 fps** |
-| `--preview` cv2 overhead | +5 ms |
-| `--out spout` instead of SHM (GL upload + DX11 interop) | +3-5 ms |
+| `--preview` cv2 overhead (CPU-only wheel, GUI thread) | +3-5 ms / frame; roughly halves 4K throughput |
+| `--out spout` instead of SHM (GL upload + DX11 interop), measured headless | ~2 ms write → ~135 fps at 4K plasma |
 | `--out ndi` instead of SHM (libndi internal encode) | +3 ms |
 
 Compute-heavy shaders (raymarch, fluid) push GPU dispatch to 10-20 ms — readback and SHM stay flat.
 
 ## Why iGPU and not the dGPU
 
-This is *the* point of the project: cross-adapter shared textures (AMD ↔ NVIDIA) don't work on Windows, and even if they did, the round-trip from a discrete GPU through PCIe back into TD's NVIDIA context costs more than rendering the same shader on the iGPU and shipping bytes via SHM (the iGPU has direct system-RAM access, so the readback is essentially `memcpy`). On a hybrid AMD + NVIDIA laptop, generating visuals on the iGPU is *free* compute that the dGPU doesn't have to do.
+This is *the* point of the project: `wgpu-py` does not currently expose a cross-adapter texture-sharing path (DX12 has the primitives for it but binding them through wgpu is a separate project), and even if it did, a round-trip from a discrete GPU through PCIe back into TD's NVIDIA context costs more than rendering the same shader on the iGPU and shipping bytes via SHM/Spout — the iGPU has direct system-RAM access, so the readback is essentially `memcpy`. On a hybrid AMD + NVIDIA laptop, generating visuals on the iGPU is *free* compute that the dGPU doesn't have to do.
 
 ## Future / non-goals
 

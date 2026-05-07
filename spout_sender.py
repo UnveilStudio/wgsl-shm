@@ -13,9 +13,11 @@ Cost model:
   `ctypes.data_as(POINTER(c_ubyte))` — Spout reads from our memory.
 - GPU side: SpoutLibrary uploads the CPU buffer into a DX11 shared texture
   internally (it has to — Spout shares DX11 NT handles, not memory). That
-  upload costs ~3-5 ms at 4K and is inherent to the protocol; we cannot
-  remove it without making wgpu render directly into a DX11 texture and
-  doing a native wgpu↔DX11 interop, which wgpu-py does not currently expose.
+  upload + GL/DX11 interop costs about 2 ms at 4K headless on a Radeon
+  880M (Win11, recent AMD drivers) and is inherent to the protocol; we
+  cannot remove it without making wgpu render directly into a DX11 texture
+  and doing a native wgpu↔DX11 interop, which wgpu-py does not currently
+  expose.
 
 Trade-off: SHM stays the fastest path (zero overhead, system RAM only).
 Spout is for receivers that don't speak SHM (TD Non-Commercial, OBS,
