@@ -44,7 +44,7 @@ The double-buffered staging is the entire reason this hits 60+ fps at 4K — wit
 
 ## SHM protocol (`td_shm.py`)
 
-Faithful port of TouchDesigner's `UT_SharedMem` + `TOP_SharedMemHeader` v2:
+Clean-room Python implementation of the publicly documented TouchDesigner `UT_SharedMem` + `TOP_SharedMemHeader` v2 wire format. We did not copy or derive from any proprietary Derivative source code — only the protocol shape is reused, since it's the explicit contract any external app must implement to talk to a Shared Memory In TOP:
 
 - **Two Win32 file mappings** with a fixed naming scheme:
 

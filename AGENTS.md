@@ -65,7 +65,7 @@ Open http://127.0.0.1:54321/?ws=54322 in a browser for the control panel.
 
 ## Don't touch
 
-- `td_shm.py` — it's a faithful port of TD's UT_SharedMem (header v2, Win32 mutex naming with the `4jhd783h` decoration, mapping size rules). Breaking the byte layout breaks every TD project that consumes the SHM.
+- `td_shm.py` — it's a clean-room Python implementation of the publicly documented `UT_SharedMem` / `TOP_SharedMemHeader` v2 wire format (header v2, Win32 mutex naming with the `4jhd783h` decoration, mapping size rules). Breaking the byte layout breaks every TD project that consumes the SHM.
 - `amd_generator.py` row-pitch alignment (`((w * 4) + 255) & ~255`) — DX12 requires 256-byte aligned row pitch in `copy_texture_to_buffer`. Change it and AMD drivers will silently produce garbage.
 
 ## Tests

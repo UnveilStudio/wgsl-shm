@@ -205,7 +205,8 @@ wgsl-shm/
 ## Built on top of
 
 - **[wgpu-py](https://github.com/pygfx/wgpu-py)** by Almar Klein et al. — the WebGPU Python bindings doing the heavy lifting (compute pipeline, buffer mapping, validation). BSD-2.
-- **[TouchDesigner](https://derivative.ca)** by Derivative — proprietary, but their `UT_SharedMem` sample code (publicly distributed with TD) is what `td_shm.py` is a Python port of.
+
+`td_shm.py` is a clean-room Python implementation of the publicly documented `UT_SharedMem` wire format used by TouchDesigner's Shared Memory In TOP. No proprietary Derivative source code was used or referenced — only the protocol shape, which is the explicit contract any third-party producer must implement.
 
 ## Support this project
 
