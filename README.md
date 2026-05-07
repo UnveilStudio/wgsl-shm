@@ -15,56 +15,31 @@
 
 # wgsl-shm
 
-> **Live performance, no compromise.**
+Real-time **WGSL compute shaders** on **AMD iGPU** → **SHM** (Win32, zero-copy), **Spout** (DX11) or **NDI** (LAN). Built for AMD Ryzen AI 300 / Radeon 880M, runs on any iGPU [wgpu-py](https://github.com/pygfx/wgpu-py) supports. **4K @ 60+ fps** with a live HTML/WebSocket panel and 16 included shaders.
 
-Real-time **WGSL compute shaders** on **AMD integrated GPU** → **Shared Memory** (Win32, zero-copy), **Spout** (DX11 GPU sharing) or **NDI** (LAN streaming).
-Built for AMD Ryzen AI 300 / Radeon 880M, runs on any AMD iGPU supported by [wgpu-py](https://github.com/pygfx/wgpu-py). 4K @ 60+ fps with a live HTML/WebSocket control panel and 16 included shaders.
+The SHM transport is byte-compatible with TouchDesigner's **Shared Memory In TOP** (UT_SharedMem). Spout opens the same frame to TD Non-Commercial, Resolume, OBS, Notch, Magic, vMix, Unreal, Unity. NDI ships it over the LAN.
 
-The SHM transport is **byte-compatible with TouchDesigner's Shared Memory In TOP** (UT_SharedMem protocol), tested live. Spout makes the same shaders show up in **TouchDesigner Non-Commercial** (where SHM In TOP isn't available), Resolume, OBS, Notch, Magic, vMix, Unreal, Unity, and any other Spout-aware app. NDI ships the frame over the LAN to receivers that don't share a machine with the producer.
+> Why these three transports? `wgpu-py` does not currently expose cross-adapter texture sharing, and NDI eats 15-25% CPU. SHM (and Spout for receivers that want a same-machine GPU handle) is zero-copy where it matters and shipping today.
 
-> Why? `wgpu-py` does not currently expose a cross-adapter texture-sharing path, and NDI eats 15-25% CPU. Local SHM (and Spout for receivers that want a GPU handle on the same machine) is zero-copy where it matters, free, and shipping today.
-
-## Built and tested on a hybrid AMD + NVIDIA performance laptop
-
-Developed and benchmarked on a **[Razer Blade 14 (2025)](https://www.razer.com/gaming-laptops/razer-blade-14)** — a deliberate hybrid setup that exposes exactly what `wgsl-shm` is designed to exploit:
-
-| Component | Role in the pipeline |
-|---|---|
-| **AMD Ryzen AI 9 365** (Zen 5 + XDNA2 NPU 50 TOPS) | CPU + the AMD APU that hosts the iGPU we run shaders on |
-| **AMD Radeon 880M iGPU** | Compute target — runs every WGSL kernel, writes directly into system RAM |
-| **NVIDIA GeForce RTX 5070 Laptop** (up to 115 W TGP) | Frees up downstream — TouchDesigner / Resolume compositing, ML inference, real-time encoding |
-| **32 GB LPDDR5X-8000** (up to 64 GB) | Unified ultra-low-latency memory shared by CPU and iGPU — readback is essentially `memcpy` |
-
-This combo is *the* sweet spot for **live performance with zero compromise**:
-
-- The **AMD iGPU writes into the same LPDDR5X memory the CPU reads** — `dispatch + copy_texture_to_buffer` lands in system RAM, no PCIe round-trip, no cross-adapter sync. That's why we hit **4K @ 60+ fps with headroom to spare**.
-- The **NVIDIA dGPU stays free** for the work it's actually best at — final compositing, generative models, encoding the show out to disk or to streaming. `wgsl-shm` never touches it.
-- The **XDNA2 NPU** is available for whatever generative model you want to stack on top of the visuals (50 TOPS sitting idle is too good not to use).
-- **LPDDR5X-8000 latency** is what makes the SHM hand-off vanishingly cheap — on a non-unified laptop you'd lose this entirely.
-
-In short: you get **discrete-GPU-class compute on the iGPU for free**, the dGPU does what it's good at, and the system memory is fast enough that the bridge between them is a no-op. That's how you ship a live show without dropping frames.
-
-> Same shader, same code, runs on **any AMD iGPU** that `wgpu-py` supports — but the Ryzen AI + LPDDR5X + dGPU combo is what makes `wgsl-shm` realistic for a touring live rig.
-
-**Windows x64 only** at the moment (the SHM transport uses `CreateFileMappingW` + Win32 mutex). NDI output is optional.
+**Windows x64 only** — the SHM transport uses `CreateFileMappingW` + Win32 mutex.
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    UI[HTML control panel<br/>browser @ 127.0.0.1:54321] -- WebSocket --> STATE[ShaderControlState<br/>uniforms + shader switch]
-    STATE --> GEN[AMDGenerator<br/>wgpu compute pipeline]
-    SHADER[shaders/*.wgsl<br/>16 included] -.hot reload.-> GEN
-    GEN --> TEX[(rgba8unorm<br/>storage texture)]
-    TEX --> RB[double-buffered<br/>staging readback]
-    RB --> FRAME[numpy uint8<br/>H × W × 4 RGBA]
+    UI[HTML panel<br/>:54321] -- WS --> STATE[ShaderControlState]
+    STATE --> GEN[AMDGenerator<br/>wgpu compute]
+    SHADER[shaders/*.wgsl] -.hot reload.-> GEN
+    GEN --> TEX[(rgba8unorm)]
+    TEX --> RB[double-buffered<br/>readback]
+    RB --> FRAME[numpy uint8 RGBA]
     FRAME --> SHM[td_shm<br/>UT_SharedMem]
-    FRAME --> SPOUT[spout_sender<br/>SpoutLibrary.dll<br/>DX11 shared NT handle]
-    FRAME --> NDI[ndi_sender<br/>libndi via ctypes]
-    FRAME --> CV2[cv2 preview<br/>--preview]
-    SHM -.-> TD[TouchDesigner Pro<br/>Shared Memory In TOP]
-    SPOUT -.-> SPR[TD Non-Commercial / OBS<br/>Resolume / Notch /<br/>Magic / Unreal / Unity]
-    NDI -.-> EXT[any NDI receiver<br/>on the LAN]
+    FRAME --> SPOUT[spout_sender]
+    FRAME --> NDI[ndi_sender]
+    FRAME --> CV2[cv2 preview]
+    SHM -.-> TD[TouchDesigner<br/>Shared Memory In TOP]
+    SPOUT -.-> SPR[TD NC / OBS / Resolume<br/>Notch / Unreal / Unity]
+    NDI -.-> EXT[any NDI receiver]
 
     classDef py fill:#0e2233,stroke:#5ac8e6,stroke-width:2px,color:#fff
     classDef gpu fill:#3a1a5c,stroke:#aa6eff,stroke-width:2px,color:#fff
@@ -74,14 +49,7 @@ flowchart LR
     class TD,SPR,EXT sys
 ```
 
-Compute shaders run **on the iGPU** (system RAM, no PCIe round-trip), readback uses two persistent staging buffers so GPU and CPU overlap (frame N writes while frame N-1 reads). The HTML panel pushes uniforms over WebSocket — slider tweaks land within a frame.
-
-## Agent-friendly
-
-Designed to be picked up by AI coding agents (Claude Code, Cursor, Copilot, …) on the first try without spelunking the source:
-
-- [`AGENTS.md`](AGENTS.md) — TL;DR + how to add a shader, run pipeline, common pitfalls.
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — module map, frame data model, uniform layout convention, SHM protocol cross-checked against TouchDesigner's `UT_SharedMem`.
+Compute runs on the iGPU (system RAM, no PCIe). Readback uses two persistent staging buffers — frame N writes while frame N-1 reads.
 
 ## Install
 
@@ -89,12 +57,7 @@ Designed to be picked up by AI coding agents (Claude Code, Cursor, Copilot, …)
 git clone https://github.com/UnveilStudio/wgsl-shm.git
 cd wgsl-shm
 pip install -r requirements.txt
-```
-
-Optional extras:
-
-```bash
-pip install opencv-python      # for --preview (cv2 window)
+pip install opencv-python      # optional, only for --preview
 ```
 
 ## Quick start
@@ -103,22 +66,23 @@ pip install opencv-python      # for --preview (cv2 window)
 python wgsl_shm.py --preview
 ```
 
-`--preview` opens a local cv2 window so you can see the output without TouchDesigner. The HTML control panel is served at **http://127.0.0.1:54321/?ws=54322** — open it in any browser to tweak the live shader uniforms.
-
-For a downstream consumer (TouchDesigner shown here, but anything that maps a Win32 file mapping works):
+Panel at <http://127.0.0.1:54321/?ws=54322>. For TouchDesigner, drop without `--preview`:
 
 ```bash
 python wgsl_shm.py
 ```
 
-In TouchDesigner add a **Shared Memory In TOP**:
+Then add a **Shared Memory In TOP** with `Memory Name = TOPamd`, `Global = OFF`. Zero-copy, native resolution.
 
-| Parameter | Value |
-|---|---|
-| Memory Name | `TOPamd` |
-| Global | OFF |
+Hot reload: save any `shaders/*.wgsl`, the pipeline recompiles. Shader switch live: dropdown in the panel.
 
-That's it — the TOP shows your shader at native resolution, zero-copy.
+## Control panel
+
+<p align="center">
+  <img src="docs/img/panel.png" alt="wgsl-shm control panel" width="100%" />
+</p>
+
+Per-shader uniforms (sliders, number boxes, color pickers) auto-generated from `shaders/<name>.json`. Status pill shows the WS link state and the active shader. Every slider tweak is a single byte hop over WebSocket → Python → wgpu uniform buffer.
 
 ## CLI
 
@@ -132,130 +96,115 @@ That's it — the TOP shows your shader at native resolution, zero-copy.
 --port N              HTTP port (WS = port + 1)
 --shm-name NAME       SHM name for TD (default TOPamd)
 --out shm|ndi|spout   transport (default shm)
---ndi-name NAME       NDI source name (default = --shm-name)
+--ndi-name / --spout-name NAME   sender names (default = --shm-name)
 --ndi-fps N/D         declared NDI frame rate (default 60/1)
---spout-name NAME     Spout sender name (default = --shm-name)
 --preview             local cv2 window
---preview-scale F     preview window scale (default 0.5 = 1080p on 4K)
+--preview-scale F     preview window scale (default 0.5)
 ```
 
-Hot reload: save any `shaders/*.wgsl` file, the pipeline recompiles without restart.
-Shader switch live: dropdown in the HTML panel.
+## Shaders
 
-## Included shaders
+`plasma`, `voronoi`, `truchet`, `kaleido`, `ripple`, `flowfield`, `tunnel`, `nebula`, `particles`, `galaxy`, `fractal`, `electric`, `raymarch`, `blackhole`, `fluid`, `sinewave`.
 
-| | | | |
-|---|---|---|---|
-| `plasma` | `voronoi` | `truchet` | `kaleido` |
-| `ripple` | `flowfield` | `tunnel` | `nebula` |
-| `particles` | `galaxy` | `fractal` | `electric` |
-| `raymarch` | `blackhole` | `fluid` | `sinewave` |
-
-Add a new one: drop `myshader.wgsl` + `myshader.json` (parameter schema) into `shaders/` and run:
-
-```bash
-python wgsl_shm.py --shader shaders/myshader.wgsl --schema shaders/myshader.json
-```
-
-## NDI output (proprietary DLL required)
-
-`--out ndi` uses the **NDI Runtime/SDK** by NewTek/Vizrt. The DLL is **closed-source proprietary** — it cannot be redistributed in this repo. You install it once, free of charge:
-
-1. Go to **https://ndi.video/download-ndi-sdk/**
-2. Download and install **"NDI 6 Tools"** (or "NDI 5/6 Runtime" if you only need to run NDI clients)
-3. The installer drops `Processing.NDI.Lib.x64.dll` in:
-
-   ```
-   C:\Program Files\NDI\NDI 6 SDK\Bin\x64\
-   ```
-
-   (or `NDI 5 Runtime\v5\`, or the `Bin\` folder of TouchDesigner). `ndi_sender.py` auto-detects the standard locations and honours `NDI_RUNTIME_DIR_V6` / `NDI_RUNTIME_DIR_V5`.
-
-If you `--out ndi` without the runtime installed you get a clear error pointing back here.
-
-> ⚠️ The NDI DLL is **not** MIT — it has its own EULA. This repo is MIT only for the original code. If you redistribute builds of this project, **do not** include the DLL — users have to install it themselves.
+Add a new one: drop `myshader.wgsl` + `myshader.json` (parameter schema) in `shaders/` and run with `--shader shaders/myshader.wgsl --schema shaders/myshader.json`.
 
 ## Transports
 
-Three ways to ship the same RGBA frame out — pick whatever your downstream consumer speaks.
+| Transport | Mechanism | When |
+|---|---|---|
+| `--out shm` *(default)* | Win32 file mapping (UT_SharedMem) | TD Commercial/Pro on the **same machine**. Lowest latency. |
+| `--out spout` | DX11 shared NT handle | TD **Non-Commercial**, Resolume, OBS, Notch, Magic, Unreal, Unity. |
+| `--out ndi` | NDI 5/6 over LAN | Receiver on a **different machine**. |
 
-| Transport | Mechanism | CPU-side cost | GPU-side cost | When to use |
-|---|---|---|---|---|
-| **`--out shm`** *(default)* | Win32 file mapping (UT_SharedMem) | `memcpy` only | none | TouchDesigner Commercial/Pro on the **same machine**. Lowest latency, lowest overhead. |
-| **`--out spout`** | DX11 shared NT handle (Spout) | zero (we pass the numpy buffer pointer directly) | ~2 ms upload + GL/DX11 interop at 4K, **inherent to Spout** | TouchDesigner **Non-Commercial** (no SHM In TOP), Resolume, OBS, Notch, Magic, vMix, Unreal, Unity. Same machine, GPU sharing. |
-| **`--out ndi`** | NDI 5/6 RTP-like over LAN | zero-copy | NDI internal encode (mDNS announce + UDP) | Receiver on a **different machine** on the LAN. Or when you want to bridge to NDI-aware tools across the network. |
+Python side is zero-copy in all three. Spout pays ~2 ms upload at 4K (DX11 interop, inherent). NDI pays its own encode.
 
-The CPU-side cost is **zero in all three** — we never copy the frame in Python. The numbers above measure overhead added by the transport itself.
-
-> Note: SHM is the fastest path because both sides agree to look at the same RAM. Spout has to push the bytes onto the GPU because that's where DX11 shared textures live; we pass the raw pointer to SpoutLibrary so we don't double-copy. NDI is the only one that crosses the network.
-
-### Spout install
-
-Spout requires the [`UnveilStudio/SPOUT2ForPython`](https://github.com/UnveilStudio/SPOUT2ForPython) package — same family of bindings as this repo, BSD-2 + bundled `SpoutLibrary.dll`:
+### Spout
 
 ```bash
 pip install git+https://github.com/UnveilStudio/SPOUT2ForPython.git
 ```
 
-If you `--out spout` without it, the script raises a clear `ImportError` pointing back to that command.
+### NDI
 
-## Performance notes
+`--out ndi` needs the **NDI Runtime/SDK** (proprietary, not redistributable):
 
-- **Resolution**: 4K @ 60+ fps on Radeon 880M with the included shaders. Raymarch / fluid drop to ~30 fps depending on iteration count.
-- **Headless throughput**: with no `--preview` and no fps cap, the plasma shader reaches **~135 fps over Spout at 4K** (`render≈4.9 ms`, `write≈2.3 ms`, `total≈7.1 ms`) on the reference Razer Blade 14. SHM is faster still — preview-less SHM measurement coming.
-- **Preview cost**: `--preview` adds ~3-5 ms / frame for the cv2 imshow GUI thread on Windows and roughly halves throughput at 4K. The standard `opencv-python` wheel is CPU-only on Windows (no CUDA / no DX accel for `cvtColor`/`resize`/GUI), so the preview is **strictly a debug aid for when you don't have a downstream consumer running** — not a hot-path tool. Headless (default) is much faster.
-- **`--profile`**: prints separate dispatch / copy ms via WGPU timestamp queries. Useful when authoring a new shader to see whether you're compute-bound or readback-bound.
-- **Workgroup size**: shaders default to `(16, 16)`. Override the `workgroup` kwarg in `AMDGenerator(...)` if a particular kernel prefers another layout.
+1. <https://ndi.video/download-ndi-sdk/>
+2. Install **NDI 6 Tools** (or NDI 5/6 Runtime).
+3. `Processing.NDI.Lib.x64.dll` lands in `C:\Program Files\NDI\NDI 6 SDK\Bin\x64\` (or `NDI 5 Runtime\v5\`, or TouchDesigner's `Bin\`). `ndi_sender.py` auto-detects and honours `NDI_RUNTIME_DIR_V6` / `NDI_RUNTIME_DIR_V5`.
 
-## Hardware / software requirements
+Without the runtime, `--out ndi` raises a clear error pointing here. Don't redistribute the DLL.
 
-- **GPU**: AMD iGPU (tested on Radeon 880M). Discrete AMD also works but the package explicitly picks the integrated one — edit `pick_igpu_amd()` in `wgsl_shm.py` for other targets.
-- **OS**: Windows. Linux/macOS need a port of `td_shm.py` (TD SHM is Win32-specific).
+## Performance
+
+Razer Blade 14 (2025), Radeon 880M, plasma shader, 4K, headless:
+
+| Metric | Value |
+|---|---|
+| Render | ~4.9 ms |
+| Write (Spout) | ~2.3 ms |
+| Total | ~7.1 ms (~135 fps over Spout) |
+
+`--preview` adds ~3-5 ms (cv2 imshow on Windows is CPU-only — strictly a debug aid). `--profile` prints separate dispatch / copy ms via WGPU timestamp queries. Default workgroup `(16, 16)` — override per kernel via `AMDGenerator(workgroup=...)`.
+
+## Hardware
+
+Built on a **[Razer Blade 14 (2025)](https://www.razer.com/gaming-laptops/razer-blade-14)**:
+
+| Component | Role |
+|---|---|
+| AMD Ryzen AI 9 365 (Zen 5 + XDNA2 50 TOPS) | CPU + APU hosting the iGPU |
+| AMD Radeon 880M iGPU | Compute target — runs every WGSL kernel, writes directly into system RAM |
+| NVIDIA RTX 5070 Laptop (115 W TGP) | Free for downstream — TD compositing, ML, encoding. `wgsl-shm` never touches it. |
+| 32 GB LPDDR5X-8000 (up to 64) | Unified RAM — iGPU readback is `memcpy` |
+
+The unified-memory hybrid is the sweet spot: iGPU writes into LPDDR5X, the CPU reads it back without PCIe, the dGPU stays available for the actual show. Same code runs on any AMD iGPU `wgpu-py` supports — but on a non-unified laptop you lose the SHM cost advantage.
+
+## Requirements
+
+- **GPU**: AMD iGPU (tested on Radeon 880M). Discrete AMD also works — edit `pick_igpu_amd()` in `wgsl_shm.py`.
+- **OS**: Windows. Linux/macOS need a port of `td_shm.py` (Win32-specific).
 - **Python**: 3.10+
-- **TouchDesigner**: optional — only needed to consume the SHM. 2023.x+ recommended.
+- **TouchDesigner**: optional, only needed to consume SHM. 2023.x+.
 
 ## Repo layout
 
 ```
 wgsl-shm/
-├── wgsl_shm.py          # entry point CLI
-├── amd_generator.py     # compute shader pipeline + double-buffered readback
+├── wgsl_shm.py          # CLI entry point
+├── amd_generator.py     # compute pipeline + double-buffered readback
 ├── td_shm.py            # Shared Memory In TOP protocol (UT_SharedMem)
 ├── ndi_sender.py        # NDI sender via libndi (DLL not bundled)
-├── spout_sender.py      # Spout sender (wraps UnveilStudio/SPOUT2ForPython)
-├── control/
-│   ├── server.py        # HTTP + WebSocket control panel
-│   └── panel.html       # browser UI
+├── spout_sender.py      # Spout sender (UnveilStudio/SPOUT2ForPython)
+├── control/{server,panel.html}   # HTTP + WS panel
 ├── shaders/             # 16 .wgsl + matching .json schemas
-├── docs/ARCHITECTURE.md # module map, dataflow, formats
-├── AGENTS.md            # TL;DR for AI coding agents
+├── docs/{ARCHITECTURE.md,img/}
+├── AGENTS.md
 └── requirements.txt
 ```
 
+`td_shm.py` is a clean-room implementation of the publicly documented `UT_SharedMem` wire format used by TouchDesigner's Shared Memory In TOP. No proprietary Derivative source was used.
+
 ## Built on top of
 
-- **[wgpu-py](https://github.com/pygfx/wgpu-py)** by Almar Klein et al. — the WebGPU Python bindings doing the heavy lifting (compute pipeline, buffer mapping, validation). BSD-2.
-- **[Spout2](https://github.com/leadedge/Spout2)** by Lynn Jarvis — the DX11 GPU sharing protocol used by `--out spout`, wrapped via [`UnveilStudio/SPOUT2ForPython`](https://github.com/UnveilStudio/SPOUT2ForPython). BSD-2.
+- **[wgpu-py](https://github.com/pygfx/wgpu-py)** by Almar Klein et al. — BSD-2. Compute pipeline, buffer mapping, validation.
+- **[Spout2](https://github.com/leadedge/Spout2)** by Lynn Jarvis — BSD-2. Wrapped via [`UnveilStudio/SPOUT2ForPython`](https://github.com/UnveilStudio/SPOUT2ForPython).
 
-`td_shm.py` is a clean-room Python implementation of the publicly documented `UT_SharedMem` wire format used by TouchDesigner's Shared Memory In TOP. No proprietary Derivative source code was used or referenced — only the protocol shape, which is the explicit contract any third-party producer must implement.
-
-## Support this project
-
-If `wgsl-shm` saves you time or makes its way into something cool, you can throw a beer 🍺 at the maintainer:
+## Support
 
 - 🟧 **Patreon** — [patreon.com/unveil_studio](https://www.patreon.com/unveil_studio)
 - 💸 **PayPal** — [paypal.me/Unveilstudio](https://paypal.me/Unveilstudio)
 
-Every tip is genuinely appreciated and goes straight into keeping this and similar tools alive.
-
 ## License
 
-This project is released under the **MIT License** — see [`LICENSE`](LICENSE).
+**MIT** — see [`LICENSE`](LICENSE).
 
-Third-party components have their own licences:
+Third-party: `wgpu-py` BSD-2, `numpy`/`websockets` BSD-3/MIT, `opencv-python` Apache 2.0, `SPOUT2ForPython` MIT (bundled `SpoutLibrary.dll` BSD-2 © Lynn Jarvis), **NDI Runtime** proprietary EULA by Vizrt — not part of this project. NDI® is a registered trademark of Vizrt Group.
 
-- [`wgpu-py`](https://github.com/pygfx/wgpu-py) — BSD-2
-- `numpy`, `websockets` — BSD-3 / MIT
-- `opencv-python` (optional, only for `--preview`) — Apache 2.0
-- [`SPOUT2ForPython`](https://github.com/UnveilStudio/SPOUT2ForPython) (optional, only for `--out spout`) — MIT, bundled `SpoutLibrary.dll` is BSD-2 © 2020-2024 Lynn Jarvis (Spout2 project)
-- **NDI Runtime** (optional, only for `--out ndi`) — proprietary EULA by **Vizrt** / NewTek; not part of this project, see the section above. NDI® is a registered trademark of Vizrt Group.
+## The Unveil Studio family
+
+| Project | Accent | What it does |
+|---|---|---|
+| [NDIForPython](https://github.com/UnveilStudio/NDIForPython) | 🟦 cyan | NDI sender/receiver via `libndi`, ctypes-thin |
+| [SPOUT2ForPython](https://github.com/UnveilStudio/SPOUT2ForPython) | 🟪 purple | Spout DX11 GPU sharing, BSD-2 SpoutLibrary.dll bundled |
+| **wgsl-shm** *(this repo)* | 🟧 coral | Real-time WGSL compute shaders on AMD iGPU → SHM / Spout / NDI |
+| [morpheus-cam](https://github.com/UnveilStudio/morpheus-cam) | 🟪 violet | Real-time body-driven Stable Diffusion · NPU + iGPU + CUDA |
