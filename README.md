@@ -29,17 +29,17 @@ Developed and benchmarked on a **[Razer Blade 14 (2025)](https://www.razer.com/g
 
 | Component | Role in the pipeline |
 |---|---|
-| **AMD Ryzen AI 9 HX 370** (Zen 5 + XDNA2 NPU 50 TOPS) | CPU + the AMD APU that hosts the iGPU we run shaders on |
+| **AMD Ryzen AI 9 365** (Zen 5 + XDNA2 NPU 50 TOPS) | CPU + the AMD APU that hosts the iGPU we run shaders on |
 | **AMD Radeon 880M iGPU** | Compute target — runs every WGSL kernel, writes directly into system RAM |
-| **NVIDIA GeForce RTX 5070 Laptop** | Frees up downstream — TouchDesigner / Resolume compositing, ML inference, real-time encoding |
-| **32 GB LPDDR5X-7500** | Unified low-latency memory shared by CPU and iGPU — readback is essentially `memcpy` |
+| **NVIDIA GeForce RTX 5070 Laptop** (up to 115 W TGP) | Frees up downstream — TouchDesigner / Resolume compositing, ML inference, real-time encoding |
+| **32 GB LPDDR5X-8000** (up to 64 GB) | Unified ultra-low-latency memory shared by CPU and iGPU — readback is essentially `memcpy` |
 
 This combo is *the* sweet spot for **live performance with zero compromise**:
 
 - The **AMD iGPU writes into the same LPDDR5X memory the CPU reads** — `dispatch + copy_texture_to_buffer` lands in system RAM, no PCIe round-trip, no cross-adapter sync. That's why we hit **4K @ 60+ fps with headroom to spare**.
 - The **NVIDIA dGPU stays free** for the work it's actually best at — final compositing, generative models, encoding the show out to disk or to streaming. `wgsl-shm` never touches it.
 - The **XDNA2 NPU** is available for whatever generative model you want to stack on top of the visuals (50 TOPS sitting idle is too good not to use).
-- **LPDDR5X-7500 latency** is what makes the SHM hand-off vanishingly cheap — on a non-unified laptop you'd lose this entirely.
+- **LPDDR5X-8000 latency** is what makes the SHM hand-off vanishingly cheap — on a non-unified laptop you'd lose this entirely.
 
 In short: you get **discrete-GPU-class compute on the iGPU for free**, the dGPU does what it's good at, and the system memory is fast enough that the bridge between them is a no-op. That's how you ship a live show without dropping frames.
 
