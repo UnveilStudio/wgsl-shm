@@ -121,4 +121,4 @@ This is *the* point of the project: cross-adapter shared textures (AMD ↔ NVIDI
 
 - **Linux/macOS port**: feasible. `td_shm.py` is the only Win32-specific module. Spout (Windows GPU sharing) and Syphon (macOS) would replace SHM on those platforms — different protocol, similar shape.
 - **Discrete GPU support**: trivial — change `pick_igpu_amd()`'s filter. Discouraged for the SHM use case (PCIe round-trip kills the latency win) but fine for NDI output.
-- **WebGPU browser frontend**: not planned. The whole point is to use TouchDesigner as the renderer/compositor; replacing it with a browser would defeat the design.
+- **WebGPU browser frontend**: not planned. The point of `wgsl-shm` is to hand the frame off to a *downstream* renderer/compositor (TouchDesigner being the most common one tested) via zero-copy SHM or NDI. Rendering inside a browser would replace that consumer instead of feeding it.

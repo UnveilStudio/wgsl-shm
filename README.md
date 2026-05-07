@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" alt="wgsl-shm — WGSL compute shaders on AMD iGPU → TouchDesigner / NDI" width="100%" />
+  <img src="assets/banner.png" alt="wgsl-shm — Real-time WGSL compute shaders on AMD iGPU → SHM / NDI" width="100%" />
 </p>
 
 <p align="center">
@@ -14,12 +14,36 @@
 
 # wgsl-shm
 
+> **Live performance, no compromise.**
+
 Real-time **WGSL compute shaders** on **AMD integrated GPU** → **Shared Memory** (Win32, zero-copy) or **NDI**.
 Built for AMD Ryzen AI 300 / Radeon 880M, runs on any AMD iGPU supported by [wgpu-py](https://github.com/pygfx/wgpu-py). 4K @ 60+ fps with a live HTML/WebSocket control panel and 16 included shaders.
 
 The SHM transport is **byte-compatible with TouchDesigner's Shared Memory In TOP** (UT_SharedMem protocol), tested live — but any consumer that can map a Win32 file mapping can read the frames.
 
 > Why? Cross-GPU shared textures (AMD → NVIDIA) don't work, and NDI eats 15-25% CPU. Local SHM is zero-copy on Windows and free.
+
+## Built and tested on a hybrid AMD + NVIDIA performance laptop
+
+Developed and benchmarked on a **[Razer Blade 14 (2025)](https://www.razer.com/gaming-laptops/razer-blade-14)** — a deliberate hybrid setup that exposes exactly what `wgsl-shm` is designed to exploit:
+
+| Component | Role in the pipeline |
+|---|---|
+| **AMD Ryzen AI 9 HX 370** (Zen 5 + XDNA2 NPU 50 TOPS) | CPU + the AMD APU that hosts the iGPU we run shaders on |
+| **AMD Radeon 880M iGPU** | Compute target — runs every WGSL kernel, writes directly into system RAM |
+| **NVIDIA GeForce RTX 5070 Laptop** | Frees up downstream — TouchDesigner / Resolume compositing, ML inference, real-time encoding |
+| **32 GB LPDDR5X-7500** | Unified low-latency memory shared by CPU and iGPU — readback is essentially `memcpy` |
+
+This combo is *the* sweet spot for **live performance with zero compromise**:
+
+- The **AMD iGPU writes into the same LPDDR5X memory the CPU reads** — `dispatch + copy_texture_to_buffer` lands in system RAM, no PCIe round-trip, no cross-adapter sync. That's why we hit **4K @ 60+ fps with headroom to spare**.
+- The **NVIDIA dGPU stays free** for the work it's actually best at — final compositing, generative models, encoding the show out to disk or to streaming. `wgsl-shm` never touches it.
+- The **XDNA2 NPU** is available for whatever generative model you want to stack on top of the visuals (50 TOPS sitting idle is too good not to use).
+- **LPDDR5X-7500 latency** is what makes the SHM hand-off vanishingly cheap — on a non-unified laptop you'd lose this entirely.
+
+In short: you get **discrete-GPU-class compute on the iGPU for free**, the dGPU does what it's good at, and the system memory is fast enough that the bridge between them is a no-op. That's how you ship a live show without dropping frames.
+
+> Same shader, same code, runs on **any AMD iGPU** that `wgpu-py` supports — but the Ryzen AI + LPDDR5X + dGPU combo is what makes `wgsl-shm` realistic for a touring live rig.
 
 **Windows x64 only** at the moment (the SHM transport uses `CreateFileMappingW` + Win32 mutex). NDI output is optional.
 
@@ -78,7 +102,7 @@ python wgsl_shm.py --preview
 
 `--preview` opens a local cv2 window so you can see the output without TouchDesigner. The HTML control panel is served at **http://127.0.0.1:54321/?ws=54322** — open it in any browser to tweak the live shader uniforms.
 
-For the real use case (TouchDesigner as the consumer):
+For a downstream consumer (TouchDesigner shown here, but anything that maps a Win32 file mapping works):
 
 ```bash
 python wgsl_shm.py
