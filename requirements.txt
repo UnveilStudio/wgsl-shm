@@ -1,6 +1,7 @@
 numpy>=1.24
 wgpu>=0.18
 websockets>=12.0
+python-osc>=1.8
 
 # Optional extras (install only if you need them):
 #   pip install opencv-python                                          # for --preview (cv2 window)

@@ -1,5 +1,5 @@
 """
-wgsl-shm — compute shader WGSL su iGPU AMD → SHM (TouchDesigner) o NDI.
+wgsl-shm — compute shader WGSL su iGPU AMD -> SHM (TouchDesigner) o NDI.
 
 Pipeline:
   [HTML panel @127.0.0.1:54321] ──WS──► ShaderControlState
@@ -10,7 +10,7 @@ Pipeline:
                               │
                 ┌─────────────┴─────────────┐
                 ▼                           ▼
-       SHM "TOPamd" → TouchDesigner   NDI source (via libndi)
+       SHM "TOPamd" -> TouchDesigner   NDI source (via libndi)
 
 Run:
   python wgsl_shm.py
@@ -41,7 +41,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from amd_generator import AMDGenerator
 from td_shm import TopSharedMemSender, TOP_FORMAT_R8G8B8A8_UNORM
-from control.server import ShaderControlState, start_servers
+from control.server import (ShaderControlState, start_servers,
+                            notify_shader_result)
 
 
 SHM_NAME = "TOPamd"
@@ -78,7 +79,7 @@ def pick_igpu_amd(required_features: list[str] = ()):
                 and info["adapter_type"] == "IntegratedGPU"
                 and chosen is None):
             chosen = a
-            mark = "→ "
+            mark = "-> "
         print(f"  {mark}{info['vendor']:10s} | {info['adapter_type']:14s} | "
               f"{info['backend_type']:8s} | {info['device']}")
     if chosen is None:
@@ -117,17 +118,32 @@ def main():
                     help="apri finestra cv2 con l'output (no TD necessario)")
     ap.add_argument("--preview-scale", type=float, default=0.5,
                     help="fattore scala finestra preview (default 0.5)")
+    ap.add_argument("--osc-port", type=int, default=54323,
+                    help="porta OSC in ingresso (default 54323)")
+    ap.add_argument("--no-osc", action="store_true",
+                    help="non aprire l'ingresso OSC")
+    ap.add_argument("--bind", default="127.0.0.1",
+                    help="indirizzo di bind per HTTP/WS/OSC (default 127.0.0.1)")
     args = ap.parse_args()
 
     w, h = args.width, args.height
-    required = ["timestamp-query"] if args.profile else []
+    # `write_timestamp` fuori da un pass richiede anche inside-encoders:
+    # senza, wgpu >= 0.31 fallisce la validazione a CommandEncoder.finish().
+    required = (["timestamp-query", "timestamp-query-inside-encoders"]
+                if args.profile else [])
     device = pick_igpu_amd(required_features=required)
 
     state = ShaderControlState(schema_path=args.schema)
 
     if not args.no_ui:
         ws_port = args.port + 1
-        start_servers(state, http_port=args.port, ws_port=ws_port)
+        start_servers(state, http_port=args.port, ws_port=ws_port, bind=args.bind)
+
+    # OSC e' un ingresso di controllo, non una UI: resta disponibile anche con
+    # --no-ui, per pilotare da TD senza panel. Lo spegne solo --no-osc.
+    if not args.no_osc:
+        from control.osc_input import start_osc
+        start_osc(state, port=args.osc_port, bind=args.bind)
 
     print(f"[wgsl-shm] building generator {w}x{h} shader={os.path.basename(args.shader)}")
     gen = AMDGenerator(
@@ -174,12 +190,19 @@ def main():
     shaders_dir = os.path.dirname(args.shader)
     current_shader_path = args.shader
     shader_mtime = os.path.getmtime(current_shader_path)
+    # In live coding il generator gira su codice che non esiste su disco:
+    # il watcher del file va staccato, o al primo mtime lo sovrascriverebbe.
+    live_mode = False
 
     target_fps = args.fps
     frame_dt = 1.0 / target_fps if target_fps > 0 else 0.0
 
     t_start = time.perf_counter()
     fps_t   = time.perf_counter()
+    # Il polling del mtime costa una syscall: a 500+ fps sarebbero centinaia
+    # di stat() al secondo per un file che cambia quando salvi in editor.
+    HOTRELOAD_POLL_S = 0.25
+    next_mtime_poll = t_start + HOTRELOAD_POLL_S
     n = 0
     acc_render = acc_write = 0.0
     acc_dispatch = acc_copy = 0.0
@@ -200,11 +223,28 @@ def main():
                             current_shader_path = new_wgsl
                             shader_mtime = os.path.getmtime(new_wgsl)
                             state.switch_schema(pending)
-                            print(f"[shader-switch] → {pending}: OK")
+                            if live_mode:
+                                live_mode = False
+                                print("[live] rientro dai file su disco")
+                            print(f"[shader-switch] -> {pending}: OK")
                         else:
-                            print(f"[shader-switch] → {pending}: compile FAILED, keeping old")
+                            print(f"[shader-switch] -> {pending}: compile FAILED, keeping old")
                     except Exception as e:
-                        print(f"[shader-switch] → {pending}: {e}")
+                        print(f"[shader-switch] -> {pending}: {e}")
+
+            pending_code = state.pop_shader_code()
+            if pending_code:
+                code, client = pending_code
+                try:
+                    ok = gen.reload_shader(shader_code=code)
+                    err = None if ok else gen.last_error
+                except Exception as e:
+                    ok, err = False, str(e)
+                if ok and not live_mode:
+                    live_mode = True
+                    print("[live] codice da WS attivo: hot-reload da file sospeso")
+                print(f"[live] shader_code: {'OK' if ok else 'FAILED (keep old)'}")
+                notify_shader_result(client, ok, err)
 
             uni_bytes = state.snapshot_as_struct(
                 UNIFORM_LAYOUT,
@@ -216,7 +256,7 @@ def main():
             result = gen.render()
             t1 = time.perf_counter()
 
-            if args.profile:
+            if gen.profiling:
                 frame, metrics = result
                 acc_dispatch += metrics["dispatch_ms"]
                 acc_copy     += metrics["copy_ms"]
@@ -247,7 +287,7 @@ def main():
                 fps = n / elapsed
                 r = acc_render / n
                 wr = acc_write / n
-                if args.profile:
+                if gen.profiling:
                     d = acc_dispatch / n
                     c = acc_copy / n
                     print(f"  {w}x{h}  fps={fps:5.1f}  "
@@ -261,16 +301,19 @@ def main():
                 acc_render = acc_write = acc_dispatch = acc_copy = 0.0
                 fps_t = time.perf_counter()
 
-            try:
-                m = os.path.getmtime(current_shader_path)
-            except OSError:
-                m = shader_mtime
-            if m != shader_mtime:
-                shader_mtime = m
-                if gen.reload_shader():
-                    print(f"[hot-reload] {os.path.basename(current_shader_path)}: OK")
-                else:
-                    print(f"[hot-reload] {os.path.basename(current_shader_path)}: FAILED (keep old)")
+            now = time.perf_counter()
+            if not live_mode and now >= next_mtime_poll:
+                next_mtime_poll = now + HOTRELOAD_POLL_S
+                try:
+                    m = os.path.getmtime(current_shader_path)
+                except OSError:
+                    m = shader_mtime
+                if m != shader_mtime:
+                    shader_mtime = m
+                    if gen.reload_shader():
+                        print(f"[hot-reload] {os.path.basename(current_shader_path)}: OK")
+                    else:
+                        print(f"[hot-reload] {os.path.basename(current_shader_path)}: FAILED (keep old)")
 
     except KeyboardInterrupt:
         print("\n[wgsl-shm] Ctrl+C.")

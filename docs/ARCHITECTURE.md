@@ -98,6 +98,58 @@ Everything happens in-process; NDI runs an internal worker thread that handles m
 
 Shader switch is a pop-once queue: the main loop calls `state.pop_pending_shader()` per frame, returns `None` when nothing is pending.
 
+## Control plane (OSC + WebSocket)
+
+Tre ingressi scrivono nello stesso `ShaderControlState`: il panel browser (WS),
+TouchDesigner via OSC, e qualunque client WS esterno. Tutti passano per
+`set_value(name, value, source=...)`.
+
+**Non c'è un arbitro.** Ultimo che scrive vince, ed è deliberato: il punto di
+serializzazione esiste già, perché il main loop fa `snapshot_as_struct()` una
+volta per frame sotto lock. Quella fotografia rende la semantica ben definita
+senza aggiungere code o priorità.
+
+Ogni scrittura registra la propria provenienza in `_sources[name] = (source, ts)`.
+Serve a una cosa sola: `external_locks()` elenca i parametri scritti da
+`osc`/`ws` negli ultimi 2 secondi, il server li trasmette ai client WS quando
+l'insieme cambia, e il panel ci spegne gli slider corrispondenti. Il timeout
+evita che staccare il patch TD lasci la UI inerte.
+
+Panel e client esterni condividono la porta WS, quindi il panel si identifica
+all'apertura con `{"type":"hello","client":"panel"}`: senza, verrebbe contato
+come sorgente esterna e spegnerebbe i propri slider.
+
+### OSC (`control/osc_input.py`)
+
+Server `python-osc` in thread daemon. Indirizzo OSC = nome del parametro, perché
+è ciò che l'OSC Out CHOP di TD manda di suo. Un argomento = scalare, tre = colore.
+Indirizzi sconosciuti ignorati in silenzio: a 60 Hz un log per messaggio
+rallenterebbe il render loop. Valori fuori range clampati, non rifiutati.
+
+### Live coding
+
+`{"type":"shader_code","code":"..."}` mette il sorgente in coda; **il main loop**
+lo compila — mai il thread WS, perché costruire una pipeline wgpu da un altro
+thread mentre il loop renderizza non è sicuro. Costa un frame, e succede quando
+scrivi codice, non a ogni frame.
+
+`reload_shader()` teneva già viva la pipeline precedente in caso di errore: è
+ciò che rende sicuro l'hot-reload da file, e il live coding lo eredita. Il
+messaggio del compilatore finisce in `AMDGenerator.last_error` e torna al
+mittente in `{"type":"shader_result","ok":false,"error":...}` con riga e colonna.
+
+**Live mode.** Dopo un `shader_code` il generator gira su codice che non esiste
+su disco, mentre `current_shader_path` punta ancora al `.wgsl`: il poll del
+mtime lo sovrascriverebbe in silenzio. Il primo `shader_code` quindi sospende il
+watcher; un `change_shader` lo riattiva.
+
+### Cambio shader e parametri
+
+`switch_schema()` **conserva** i valori omonimi invece di azzerarli, clampandoli
+nel range del nuovo schema. Il clamp è obbligatorio perché i range divergono
+davvero tra i 16 shader (`scale` da `(0.2, 6.0)` a `(1.0, 20.0)`, `octaves` da
+`(1, 4)` a `(3, 12)`).
+
 ## Frame format conventions
 
 | Surface | Format | Layout | Notes |
@@ -111,17 +163,17 @@ Shader switch is a pop-once queue: the main loop calls `state.pop_pending_shader
 
 ## Performance characteristics
 
-Numbers below are 4K (3840 × 2160), Radeon 880M, plasma shader, no preview, no fps cap, measured with `--profile`:
+Numbers below are 4K (3840 × 2160), Radeon 880M (Vulkan backend), plasma shader, no preview, no fps cap. Re-measured 2026-09-23; the previous table over-stated the SHM frame time by roughly 2×:
 
 | Stage | Time |
 |---|---|
-| GPU compute dispatch | ~2 ms |
-| GPU texture → staging copy | ~3 ms |
-| CPU map + memcpy from staging | ~7 ms |
-| `tx.write` (SHM mutex + memcpy) | ~2 ms |
-| **Frame total (no preview, SHM)** | **~14 ms ≈ 65 fps** |
+| `gen.render()` (dispatch + copy + map + memcpy) | ~5.4 ms |
+| `tx.write` (SHM mutex + memcpy) | ~1.2 ms |
+| **Frame total (no preview, SHM)** | **~6.6 ms ≈ 142 fps** |
 | `--preview` cv2 overhead (CPU-only wheel, GUI thread) | +3-5 ms / frame; roughly halves 4K throughput |
 | `--out spout` instead of SHM (GL upload + DX11 interop), measured headless | ~2 ms write → ~135 fps at 4K plasma |
+| 1080p plasma, SHM | ~1.6 ms → ~580 fps |
+| 4K raymarch (compute-heavy), SHM | ~15.6 ms → ~62 fps |
 | `--out ndi` instead of SHM (libndi internal encode) | +3 ms |
 
 Compute-heavy shaders (raymarch, fluid) push GPU dispatch to 10-20 ms — readback and SHM stay flat.

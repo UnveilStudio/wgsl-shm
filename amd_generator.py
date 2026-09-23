@@ -62,6 +62,7 @@ class AMDGenerator:
         self.workgroup = workgroup
         self._shader_path = shader_path
         self._profile = enable_profile
+        self.last_error: str | None = None   # ultimo errore di compilazione
 
         if shader_path:
             with open(shader_path, "r", encoding="utf-8") as f:
@@ -110,6 +111,11 @@ class AMDGenerator:
         self._qset = None
         self._ts_resolve_buf = None
         self._ts_readback_buf = None
+        if enable_profile and "timestamp-query-inside-encoders" not in device.features:
+            print("[AMDGenerator] device senza 'timestamp-query-inside-encoders': "
+                  "profile GPU disabilitato, resta il timing CPU-side")
+            enable_profile = False
+            self._profile = False
         if enable_profile:
             try:
                 self._qset = device.create_query_set(type="timestamp", count=4)
@@ -124,6 +130,16 @@ class AMDGenerator:
             except Exception as e:
                 print(f"[AMDGenerator] timestamp query non disponibile ({e!r}), profile CPU-only")
                 self._qset = None
+                self._profile = False
+
+    @property
+    def profiling(self) -> bool:
+        """True solo se `render()` ritorna davvero (frame, metrics).
+
+        Puo' essere False anche con enable_profile=True: il device puo' non
+        avere la feature, o la creazione del query set puo' fallire.
+        """
+        return self._qset is not None
 
     def _build_pipeline(self, shader_code: str):
         module = self.device.create_shader_module(code=shader_code)
@@ -134,16 +150,24 @@ class AMDGenerator:
         self._shader_code = shader_code
 
     def reload_shader(self, shader_code: str | None = None) -> bool:
-        """Ricompila lo shader. Se compile-fail, tiene il vecchio e torna False."""
+        """Ricompila lo shader. Se compile-fail, tiene il vecchio e torna False.
+
+        Il messaggio del compilatore resta in `last_error`: in live coding e'
+        l'unica cosa che dice a chi scrive *cosa* ha sbagliato, e va rispedita
+        al mittente del codice.
+        """
         if shader_code is None and self._shader_path:
             with open(self._shader_path, "r", encoding="utf-8") as f:
                 shader_code = f.read()
         if shader_code is None:
+            self.last_error = "nessun sorgente da compilare"
             return False
         try:
             self._build_pipeline(shader_code)
+            self.last_error = None
             return True
         except Exception as e:
+            self.last_error = str(e)
             print(f"[AMDGenerator] reload_shader FAILED: {e}")
             return False
 

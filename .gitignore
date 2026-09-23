@@ -37,3 +37,6 @@ libndi.so*
 
 # Cache shader compilation (wgpu)
 .wgpu_cache/
+
+# test
+.pytest_cache/

@@ -35,6 +35,8 @@
   }
   .row{display:grid; grid-template-columns: 110px 1fr 72px; gap:10px; align-items:center; margin:8px 0;}
   .row label{color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:0.8px;}
+  .row.locked{ opacity:.45; }
+  .row.locked label::after{ content:" - da OSC/WS"; opacity:.7; font-size:.85em; }
   .row input[type=range]{
     -webkit-appearance:none; appearance:none;
     height:4px; background:var(--edge); border-radius:2px; outline:none;
@@ -104,15 +106,34 @@ function connectWS(){
   const wsPort  = params.get("ws") || (parseInt(location.port) + 1);
   const url     = `ws://${location.hostname}:${wsPort}/`;
   ws = new WebSocket(url);
-  ws.onopen    = () => setStatus("ok", "live");
+  ws.onopen    = () => {
+    setStatus("ok", "live");
+    // Ci presentiamo: senza questo il server ci tratterebbe come client
+    // esterno e il panel spegnerebbe i propri slider da solo.
+    ws.send(JSON.stringify({type: "hello", client: "panel"}));
+  };
   ws.onclose   = () => { setStatus("bad", "disconnected – retry in 1s"); setTimeout(connectWS, 1000); };
   ws.onerror   = () => setStatus("bad", "error");
   ws.onmessage = (e) => {
     try {
       const m = JSON.parse(e.data);
       if (m.type === "schema_changed") loadSchema();
+      if (m.type === "locks") applyLocks(m.params || []);
     } catch(_) {}
   };
+}
+
+// name -> elementi da disabilitare quando il parametro e' pilotato da fuori
+const controls = {};
+
+function applyLocks(locked){
+  const set = new Set(locked);
+  Object.entries(controls).forEach(([name, els]) => {
+    const lock = set.has(name);
+    els.forEach(el => { el.disabled = lock; });
+    const row = els[0] && els[0].closest(".row");
+    if (row) row.classList.toggle("locked", lock);
+  });
 }
 
 function send(name, value){
@@ -159,6 +180,7 @@ function buildRow(u){
     num.onchange   = e => push(e.target.value);
 
     state[u.name] = u.default;
+    controls[u.name] = [slider, num];
     row.appendChild(slider);
     row.appendChild(num);
   }
@@ -178,6 +200,7 @@ function buildRow(u){
       send(u.name, rgb);
     };
     state[u.name] = u.default.slice();
+    controls[u.name] = [picker];
 
     sw.appendChild(picker);
     sw.appendChild(txt);
@@ -213,6 +236,7 @@ async function loadSchema(){
     ssel.value = currentShader;
     panel.innerHTML = "";
     state = {};
+    Object.keys(controls).forEach(k => delete controls[k]);
     schema.uniforms.forEach(u => panel.appendChild(buildRow(u)));
     schema.uniforms.forEach(u => send(u.name, state[u.name]));
     setStatus("ok", schema.name + " loaded");

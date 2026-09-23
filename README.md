@@ -15,7 +15,9 @@
 
 # wgsl-shm
 
-Real-time **WGSL compute shaders** on **AMD iGPU** → **SHM** (Win32, zero-copy), **Spout** (DX11) or **NDI** (LAN). Built for AMD Ryzen AI 300 / Radeon 880M, runs on any iGPU [wgpu-py](https://github.com/pygfx/wgpu-py) supports. **4K @ 60+ fps** with a live HTML/WebSocket panel and 16 included shaders.
+Real-time **WGSL compute shaders** on **AMD iGPU** → **SHM** (Win32, zero-copy), **Spout** (DX11) or **NDI** (LAN). Built for AMD Ryzen AI 300 / Radeon 880M, runs on any iGPU [wgpu-py](https://github.com/pygfx/wgpu-py) supports. **4K @ 140 fps** with a live HTML/WebSocket panel and 16 included shaders.
+
+Drivable from **TouchDesigner**: parameters over **OSC**, and WGSL source shipped over **WebSocket** for live coding — a broken shader replies with the compiler error and never interrupts the video. See [`docs/TOUCHDESIGNER.md`](docs/TOUCHDESIGNER.md).
 
 The SHM transport is byte-compatible with TouchDesigner's **Shared Memory In TOP** (UT_SharedMem). Spout opens the same frame to TD Non-Commercial, Resolume, OBS, Notch, Magic, vMix, Unreal, Unity. NDI ships it over the LAN.
 
@@ -28,6 +30,8 @@ The SHM transport is byte-compatible with TouchDesigner's **Shared Memory In TOP
 ```mermaid
 flowchart LR
     UI[HTML panel<br/>:54321] -- WS --> STATE[ShaderControlState]
+    TDIN[TouchDesigner] -- "OSC :54323<br/>params" --> STATE
+    TDIN -- "WS :54322<br/>WGSL live" --> STATE
     STATE --> GEN[AMDGenerator<br/>wgpu compute]
     SHADER[shaders/*.wgsl] -.hot reload.-> GEN
     GEN --> TEX[(rgba8unorm)]
@@ -45,6 +49,7 @@ flowchart LR
     classDef gpu fill:#3a1a5c,stroke:#aa6eff,stroke-width:2px,color:#fff
     classDef sys fill:#0d1117,stroke:#444,color:#fff
     class UI,STATE,GEN,RB,FRAME,SHM,SPOUT,NDI,CV2 py
+    class TDIN sys
     class TEX gpu
     class TD,SPR,EXT sys
 ```
@@ -84,6 +89,38 @@ Hot reload: save any `shaders/*.wgsl`, the pipeline recompiles. Shader switch li
 
 Per-shader uniforms (sliders, number boxes, color pickers) auto-generated from `shaders/<name>.json`. Status pill shows the WS link state and the active shader. Every slider tweak is a single byte hop over WebSocket → Python → wgpu uniform buffer.
 
+## Driving it from TouchDesigner
+
+TD consumes the video (Spout or SHM) **and** drives the generator. Full setup in
+[`docs/TOUCHDESIGNER.md`](docs/TOUCHDESIGNER.md).
+
+**Parameters over OSC** — the OSC address is the parameter name, which is exactly
+what an OSC Out CHOP sends. Name your channels `scale`, `warp`, `speed`… and wire
+it to `127.0.0.1:54323`. Nothing to map.
+
+```
+/scale     1.7
+/col_a     0.1 0.1 0.5
+```
+
+Whatever TD sends is TD's: those sliders grey out in the panel, and come back
+2 s after TD goes quiet. Export only the channels you want to own.
+
+**Live coding over WebSocket** — ship WGSL from a Text DAT and see it on screen:
+
+```json
+{"type": "shader_code", "code": "@compute @workgroup_size(16,16) fn main(...) {...}"}
+```
+
+If it doesn't compile, the previous shader stays on screen and you get the
+compiler error back, with line and column:
+
+```json
+{"type": "shader_result", "ok": false, "error": "... ┌─ wgsl:14:9 ..."}
+```
+
+You can be as wrong as you like while the show is running.
+
 ## CLI
 
 ```
@@ -100,6 +137,9 @@ Per-shader uniforms (sliders, number boxes, color pickers) auto-generated from `
 --ndi-fps N/D         declared NDI frame rate (default 60/1)
 --preview             local cv2 window
 --preview-scale F     preview window scale (default 0.5)
+--osc-port N          OSC input port (default 54323)
+--no-osc              don't open the OSC input
+--bind ADDR           bind address for HTTP / WS / OSC (default 127.0.0.1)
 ```
 
 ## Shaders
@@ -138,11 +178,12 @@ Without the runtime, `--out ndi` raises a clear error pointing here. Don't redis
 
 Razer Blade 14 (2025), Radeon 880M, plasma shader, 4K, headless:
 
-| Metric | Value |
-|---|---|
-| Render | ~4.9 ms |
-| Write (Spout) | ~2.3 ms |
-| Total | ~7.1 ms (~135 fps over Spout) |
+| Scenario | Render | Write | Total |
+|---|---|---|---|
+| plasma 4K → SHM | ~5.4 ms | ~1.2 ms | **~6.6 ms (~142 fps)** |
+| plasma 4K → Spout | ~4.9 ms | ~2.3 ms | ~7.1 ms (~135 fps) |
+| plasma 1080p → SHM | ~1.3 ms | ~0.3 ms | ~1.6 ms (~580 fps) |
+| raymarch 4K → SHM | ~14.4 ms | ~1.3 ms | ~15.6 ms (~62 fps) |
 
 `--preview` adds ~3-5 ms (cv2 imshow on Windows is CPU-only — strictly a debug aid). `--profile` prints separate dispatch / copy ms via WGPU timestamp queries. Default workgroup `(16, 16)` — override per kernel via `AMDGenerator(workgroup=...)`.
 
@@ -176,8 +217,10 @@ wgsl-shm/
 ├── ndi_sender.py        # NDI sender via libndi (DLL not bundled)
 ├── spout_sender.py      # Spout sender (UnveilStudio/SPOUT2ForPython)
 ├── control/{server,panel.html}   # HTTP + WS panel
+├── control/osc_input.py # OSC input (address = parameter name)
+├── tests/               # GPU-free logic: clamping, locks, OSC parsing
 ├── shaders/             # 16 .wgsl + matching .json schemas
-├── docs/{ARCHITECTURE.md,img/}
+├── docs/{ARCHITECTURE.md,TOUCHDESIGNER.md,img/}
 ├── AGENTS.md
 └── requirements.txt
 ```
@@ -198,7 +241,7 @@ wgsl-shm/
 
 **MIT** — see [`LICENSE`](LICENSE).
 
-Third-party: `wgpu-py` BSD-2, `numpy`/`websockets` BSD-3/MIT, `opencv-python` Apache 2.0, `SPOUT2ForPython` MIT (bundled `SpoutLibrary.dll` BSD-2 © Lynn Jarvis), **NDI Runtime** proprietary EULA by Vizrt — not part of this project. NDI® is a registered trademark of Vizrt Group.
+Third-party: `wgpu-py` BSD-2, `numpy`/`websockets`/`python-osc` BSD-3/MIT, `opencv-python` Apache 2.0, `SPOUT2ForPython` MIT (bundled `SpoutLibrary.dll` BSD-2 © Lynn Jarvis), **NDI Runtime** proprietary EULA by Vizrt — not part of this project. NDI® is a registered trademark of Vizrt Group.
 
 ## The Unveil Studio family
 
