@@ -18,6 +18,7 @@ Run:
   python wgsl_shm.py --preview            # finestra cv2 locale (no TD richiesto)
   python wgsl_shm.py --out ndi --ndi-name "wgsl-shm"
   python wgsl_shm.py --out spout --spout-name "wgsl-shm"   # TD Non-Commercial friendly
+  python wgsl_shm.py --out ndi spout                       # entrambi i transport insieme
 
 Apri: http://127.0.0.1:54321/?ws=54322
 
@@ -30,7 +31,7 @@ Opzioni:
   --width  / --height   override risoluzione (default 3840x2160)
   --preview             apri finestra cv2 con l'output (no TD necessario)
   --preview-scale F     fattore scala finestra preview (default 0.5)
-  --out shm|ndi|spout   transport del frame (default shm)
+  --out shm|ndi|spout   transport del frame, uno o piu' insieme (default shm)
 """
 import os, sys, time
 
@@ -108,8 +109,8 @@ def main():
     ap.add_argument("--width",   type=int, default=3840)
     ap.add_argument("--height",  type=int, default=2160)
     ap.add_argument("--shm-name", default=SHM_NAME, help="nome SHM TD (default TOPamd)")
-    ap.add_argument("--out",      default="shm", choices=["shm", "ndi", "spout"],
-                    help="transport del frame: shm (default), ndi o spout")
+    ap.add_argument("--out",      default=["shm"], nargs="+", choices=["shm", "ndi", "spout"],
+                    help="transport del frame, uno o piu': shm (default), ndi, spout")
     ap.add_argument("--ndi-name",   default=None, help="nome NDI source (default = --shm-name)")
     ap.add_argument("--ndi-fps",    default="60/1", help="frame rate NDI dichiarato (N/D, default 60/1)")
     ap.add_argument("--spout-name", default=None, help="nome Spout sender (default = --shm-name)")
@@ -154,26 +155,30 @@ def main():
         enable_profile=args.profile,
     )
 
-    if args.out == "ndi":
-        from ndi_sender import NdiSender
-        n_str, d_str = args.ndi_fps.split("/")
-        tx = NdiSender(
-            short_name=args.ndi_name or args.shm_name,
-            width=w, height=h,
-            fps_n=int(n_str), fps_d=int(d_str),
-        )
-    elif args.out == "spout":
-        from spout_sender import SpoutOut
-        tx = SpoutOut(
-            short_name=args.spout_name or args.shm_name,
-            width=w, height=h,
-        )
-    else:
-        tx = TopSharedMemSender(
-            short_name=args.shm_name, width=w, height=h,
-            pixel_format=TOP_FORMAT_R8G8B8A8_UNORM, bytes_per_pixel=4,
-            global_ns=False,
-        )
+    # Ogni transport espone la stessa API .write(frame)/.close(), quindi
+    # possono girare insieme senza che il resto del loop lo sappia.
+    txs = []
+    for out in dict.fromkeys(args.out):  # dedup, ordine stabile
+        if out == "ndi":
+            from ndi_sender import NdiSender
+            n_str, d_str = args.ndi_fps.split("/")
+            txs.append(NdiSender(
+                short_name=args.ndi_name or args.shm_name,
+                width=w, height=h,
+                fps_n=int(n_str), fps_d=int(d_str),
+            ))
+        elif out == "spout":
+            from spout_sender import SpoutOut
+            txs.append(SpoutOut(
+                short_name=args.spout_name or args.shm_name,
+                width=w, height=h,
+            ))
+        else:
+            txs.append(TopSharedMemSender(
+                short_name=args.shm_name, width=w, height=h,
+                pixel_format=TOP_FORMAT_R8G8B8A8_UNORM, bytes_per_pixel=4,
+                global_ns=False,
+            ))
 
     total_mb = w * h * 4 / (1024 * 1024)
     print(f"[wgsl-shm] frame={total_mb:.1f}MB  |  profile={args.profile}  |  Ctrl+C per uscire\n")
@@ -263,7 +268,8 @@ def main():
             else:
                 frame = result
 
-            tx.write(frame)
+            for tx in txs:
+                tx.write(frame)
             t2 = time.perf_counter()
 
             if cv2 is not None:
@@ -318,7 +324,8 @@ def main():
     except KeyboardInterrupt:
         print("\n[wgsl-shm] Ctrl+C.")
     finally:
-        tx.close()
+        for tx in txs:
+            tx.close()
         if cv2 is not None:
             cv2.destroyAllWindows()
         print("[wgsl-shm] stop.")
