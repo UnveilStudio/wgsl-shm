@@ -29,6 +29,7 @@ logs/
 .env
 .env.local
 *.local
+run.bat
 
 # NDI proprietary DLLs (utenti devono installarle separatamente, vedi README)
 Processing.NDI.Lib.x64.dll
